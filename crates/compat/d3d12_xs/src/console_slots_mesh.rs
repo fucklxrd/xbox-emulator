@@ -1,4 +1,5 @@
 use crate::console_slots_dev2::{family, Family};
+use crate::mesh_pso::Guid;
 use compat_common::record;
 use core::ffi::c_void;
 use core::sync::atomic::{AtomicUsize, Ordering};
@@ -13,6 +14,10 @@ pub const FORCE_MEMORY_BASED_ABI: u32 = 0x0100_0000;
 pub const RTS0_FLAGS_OFFSET: usize = 20;
 pub const LIST_TYPE_BUNDLE: u32 = 1;
 const E_INVALIDARG: i32 = 0x8007_0057u32 as i32;
+const DXGI_ERROR_MORE_DATA: i32 = 0x887a_0003u32 as i32;
+const MAX_ROOT_DATA: usize = 4 * 1024 * 1024;
+const IID_ROOT_SIGNATURE: Guid = Guid(0xc54a6b66, 0x72df, 0x4ee8, [0x8b, 0xe5, 0xa9, 0x46, 0xa1, 0x42, 0x92, 0x14]);
+const CONSOLE_ROOT_DATA: Guid = Guid(0x64f4278c, 0x72c7, 0x4f3d, [0x8e, 0xba, 0x1d, 0x4c, 0xc9, 0x4a, 0x5e, 0x82]);
 
 static PREV_RS: AtomicUsize = AtomicUsize::new(0);
 static RS_FLAGS: Mutex<Option<HashMap<usize, u32>>> = Mutex::new(None);
@@ -112,6 +117,52 @@ pub fn note_root_flags(rs: usize, flags: u32) {
     RS_FLAGS.lock().unwrap_or_else(|e| e.into_inner()).get_or_insert_with(HashMap::new).insert(rs, flags);
 }
 
+unsafe fn store_root_data(unknown: *mut c_void, blob: &[u8]) {
+    let Some((offset, size)) = rts0_range(blob) else { return };
+    if !(RTS0_FLAGS_OFFSET + 4..=MAX_ROOT_DATA).contains(&size) {
+        return;
+    }
+    let body = &blob[offset..offset + size];
+    let vt = *(unknown as *const *const usize);
+    let query: unsafe extern "system" fn(*mut c_void, *const Guid, *mut *mut c_void) -> i32 =
+        core::mem::transmute(*vt);
+    let mut root = core::ptr::null_mut();
+    if query(unknown, &IID_ROOT_SIGNATURE, &mut root) < 0 || root.is_null() {
+        return;
+    }
+    // CreateRootSignature can return IUnknown. Only the queried root interface has these slots.
+    let vt = *(root as *const *const usize);
+    let set: unsafe extern "system" fn(*mut c_void, *const Guid, u32, *const u8) -> i32 =
+        core::mem::transmute(*vt.add(4));
+    let release: unsafe extern "system" fn(*mut c_void) -> u32 = core::mem::transmute(*vt.add(2));
+    let hr = set(root, &CONSOLE_ROOT_DATA, size as u32, body.as_ptr());
+    release(root);
+    if hr < 0 && once(4) {
+        record("d3d12_xs", "console_slots_mesh", &format!("could not retain console root signature data: hr={hr:#010x}"));
+    }
+}
+
+/// Read the original RTS0 body from a live ID3D12RootSignature supplied by a PSO stream.
+pub unsafe fn root_data(root: *mut c_void) -> Option<Vec<u8>> {
+    if root.is_null() {
+        return None;
+    }
+    let vt = *(root as *const *const usize);
+    let get: unsafe extern "system" fn(*mut c_void, *const Guid, *mut u32, *mut u8) -> i32 =
+        core::mem::transmute(*vt.add(3));
+    let mut size = 0;
+    let hr = get(root, &CONSOLE_ROOT_DATA, &mut size, core::ptr::null_mut());
+    if (hr < 0 && hr != DXGI_ERROR_MORE_DATA) || !(RTS0_FLAGS_OFFSET + 4..=MAX_ROOT_DATA).contains(&(size as usize)) {
+        return None;
+    }
+    let mut body = vec![0; size as usize];
+    let hr = get(root, &CONSOLE_ROOT_DATA, &mut size, body.as_mut_ptr());
+    if hr < 0 || size as usize != body.len() {
+        return None;
+    }
+    Some(body)
+}
+
 type RsFn = unsafe extern "system" fn(*mut c_void, u32, *const u8, usize, *const c_void, *mut *mut c_void) -> i32;
 
 unsafe extern "system" fn create_root_signature(this: *mut c_void, mask: u32, blob: *const u8, len: usize, riid: *const c_void, ppv: *mut *mut c_void) -> i32 {
@@ -132,6 +183,7 @@ unsafe extern "system" fn create_root_signature(this: *mut c_void, mask: u32, bl
     };
     if hr >= 0 && !ppv.is_null() && !unsafe { *ppv }.is_null() {
         if let Some(fl) = flags {
+            unsafe { store_root_data(*ppv, b) };
             note_root_flags(unsafe { *ppv } as usize, fl);
             if pc.is_some() && once(4) {
                 record("d3d12_xs", "console_slots_mesh", &format!("root signature {:p}: console-only flag bits {:#x} (XBOX_FORCE_MEMORY_BASED_ABI 0x01000000, XBOX_FORCE_COMPUTE_2_SPILL_AREA 0x02000000, driver-discarded 0x80000000) cleared for the PC runtime, which rejects them; flags {fl:#x} kept for PSO validation", unsafe { *ppv }, crate::rs_xbox::XboxRoot(fl).xbox_bits()));
@@ -312,6 +364,66 @@ mod tests {
         note_root_flags(0xabc0, 0x0100_0000);
         assert_eq!(root_flags(0xabc0), Some(0x0100_0000));
         assert_eq!(root_flags(0xabc8), None);
+    }
+
+    #[test]
+    fn original_root_data_is_stored_on_the_queried_interface() {
+        #[repr(C)]
+        struct Root {
+            vtable: *const usize,
+            body: Vec<u8>,
+            releases: u32,
+        }
+        #[repr(C)]
+        struct Unknown {
+            vtable: *const usize,
+            root: *mut Root,
+        }
+        fn same_guid(a: &Guid, b: &Guid) -> bool {
+            (a.0, a.1, a.2, a.3) == (b.0, b.1, b.2, b.3)
+        }
+        unsafe extern "system" fn query(this: *mut c_void, iid: *const Guid, out: *mut *mut c_void) -> i32 {
+            if !same_guid(&*iid, &IID_ROOT_SIGNATURE) {
+                return E_INVALIDARG;
+            }
+            *out = (*(this as *mut Unknown)).root.cast();
+            0
+        }
+        unsafe extern "system" fn release(this: *mut c_void) -> u32 {
+            (*(this as *mut Root)).releases += 1;
+            1
+        }
+        unsafe extern "system" fn get(this: *mut c_void, tag: *const Guid, size: *mut u32, data: *mut u8) -> i32 {
+            let body = &(*(this as *mut Root)).body;
+            if !same_guid(&*tag, &CONSOLE_ROOT_DATA) || body.is_empty() {
+                return E_INVALIDARG;
+            }
+            let capacity = *size as usize;
+            *size = body.len() as u32;
+            if data.is_null() || capacity < body.len() {
+                return DXGI_ERROR_MORE_DATA;
+            }
+            core::ptr::copy_nonoverlapping(body.as_ptr(), data, body.len());
+            0
+        }
+        unsafe extern "system" fn set(this: *mut c_void, tag: *const Guid, size: u32, data: *const u8) -> i32 {
+            if !same_guid(&*tag, &CONSOLE_ROOT_DATA) {
+                return E_INVALIDARG;
+            }
+            (*(this as *mut Root)).body = core::slice::from_raw_parts(data, size as usize).to_vec();
+            0
+        }
+        let root_vtable = [0, 0, release as usize, get as usize, set as usize];
+        let mut root = Root { vtable: root_vtable.as_ptr(), body: Vec::new(), releases: 0 };
+        let root_ptr = &raw mut root;
+        let unknown_vtable = [query as usize, 0, 0];
+        let mut unknown = Unknown { vtable: unknown_vtable.as_ptr(), root: root_ptr };
+        assert_eq!(unsafe { root_data(root_ptr.cast()) }, None);
+        let blob = rts0(FORCE_MEMORY_BASED_ABI);
+        let (offset, size) = rts0_range(&blob).unwrap();
+        unsafe { store_root_data((&mut unknown as *mut Unknown).cast(), &blob) };
+        assert_eq!(unsafe { root_data(root_ptr.cast()) }.as_deref(), Some(&blob[offset..offset + size]));
+        assert_eq!(root.releases, 1);
     }
 
     #[test]

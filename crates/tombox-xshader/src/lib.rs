@@ -82,6 +82,22 @@ impl Dxbc {
     }
 }
 
+/// Parse a standalone serialized root signature or an extracted RTS0 chunk body.
+pub fn parse_root_signature(data: &[u8]) -> Result<meta::RootSig, String> {
+    let body = if data.starts_with(b"DXBC") {
+        let dxbc = Dxbc::parse(data)?;
+        let rts = dxbc.chunk(b"RTS0").ok_or("DXBC has no RTS0 chunk")?;
+        &data[rts.offset..rts.offset + rts.size]
+    } else {
+        data
+    };
+    let version = u32_at(body, 0)?;
+    if !(1..=3).contains(&version) {
+        return Err(format!("unsupported root signature version {version}"));
+    }
+    meta::parse_rts0(body)
+}
+
 /// Program type from the DXIL program header (D3D12_SHADER_VERSION_TYPE).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Stage {

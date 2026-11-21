@@ -100,10 +100,13 @@ fn check(label: &str, words: &[u32], root: Option<RootSig>, expect: &[&str]) {
     for e in expect {
         assert!(t.hlsl.contains(e), "{label}: missing {e:?} in\n{}", t.hlsl);
     }
-    assert!(tombox_xshader::dxc::available(), "{label}: DXC (dxcompiler.dll + dxil.dll) not found");
-    let profile = tombox_xshader::dxc::profile_for(t.profile);
-    let code = tombox_xshader::dxc::compile(&t.hlsl, &profile).unwrap_or_else(|e| panic!("{label}: dxc: {e}\n{}", t.hlsl));
-    assert!(code.len() > 4 && &code[..4] == b"DXBC", "{label}: DXC returned no container");
+    #[cfg(windows)]
+    {
+        assert!(tombox_xshader::dxc::available(), "{label}: DXC (dxcompiler.dll + dxil.dll) not found");
+        let profile = tombox_xshader::dxc::profile_for(t.profile);
+        let code = tombox_xshader::dxc::compile(&t.hlsl, &profile).unwrap_or_else(|e| panic!("{label}: dxc: {e}\n{}", t.hlsl));
+        assert!(code.len() > 4 && &code[..4] == b"DXBC", "{label}: DXC returned no container");
+    }
 }
 
 fn mnemonic(words: &[u32]) -> (String, Opnd) {

@@ -13,7 +13,9 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex, OnceLock};
 
 type Cached = Result<Arc<Vec<u8>>, Arc<String>>;
-static CACHE: OnceLock<Mutex<HashMap<u64, Arc<OnceLock<Cached>>>>> = OnceLock::new();
+type CacheCell = Arc<OnceLock<Cached>>;
+static CACHE: OnceLock<Mutex<HashMap<u64, CacheCell>>> = OnceLock::new();
+static MESH_ROOT_CACHE: OnceLock<Mutex<HashMap<u64, HashMap<Vec<u8>, CacheCell>>>> = OnceLock::new();
 static OK: AtomicUsize = AtomicUsize::new(0);
 static FAIL: AtomicUsize = AtomicUsize::new(0);
 static DUMPED: AtomicUsize = AtomicUsize::new(0);
@@ -183,11 +185,14 @@ pub fn disable_loop_grad(hlsl: &str) -> String {
         .join("\n")
 }
 
-fn translate_uncached(blob: &[u8], hash: u64, rtfmt: &[u8; 8]) -> Result<Vec<u8>, String> {
-    let ex = tombox_xshader::extract(blob).map_err(|e| {
+fn translate_uncached(blob: &[u8], hash: u64, rtfmt: &[u8; 8], root: Option<&[u8]>) -> Result<Vec<u8>, String> {
+    let mut ex = tombox_xshader::extract(blob).map_err(|e| {
         dump_failure(hash, blob, None, &e);
         format!("extract: {e}")
     })?;
+    if let Some(root) = root.filter(|_| !ex.has_root_sig) {
+        ex.root_sig = Some(tombox_xshader::parse_root_signature(root).map_err(|e| format!("pipeline root signature: {e}"))?);
+    }
     let mut t = tombox_xshader::hlsl::translate(&ex).map_err(|e| {
         dump_failure(hash, blob, None, &e);
         format!("translate: {e}")
@@ -276,7 +281,7 @@ pub unsafe fn translate(ptr: *const u8, len: usize) -> Cached {
 }
 
 pub fn retranslate(blob: &Arc<Vec<u8>>, hash: u64, rtfmt: [u8; 8]) -> Result<Arc<Vec<u8>>, String> {
-    let v = std::panic::catch_unwind(|| translate_uncached(blob, hash, &rtfmt)).unwrap_or_else(|_| Err("translator panicked".to_string()))?;
+    let v = std::panic::catch_unwind(|| translate_uncached(blob, hash, &rtfmt, None)).unwrap_or_else(|_| Err("translator panicked".to_string()))?;
     let v = Arc::new(v);
     ORIGIN.get_or_init(|| Mutex::new(HashMap::new())).lock().unwrap().insert(v.as_ptr() as usize, (hash, blob.clone()));
     Ok(v)
@@ -400,7 +405,7 @@ fn produce(blob: &[u8], hash: u64, rtfmt: &[u8; 8], key: u64) -> Result<Vec<u8>,
             }
         }
     }
-    let r = std::panic::catch_unwind(|| translate_uncached(blob, hash, rtfmt)).unwrap_or_else(|_| Err("translator panicked".to_string()));
+    let r = std::panic::catch_unwind(|| translate_uncached(blob, hash, rtfmt, None)).unwrap_or_else(|_| Err("translator panicked".to_string()));
     if let Ok(v) = &r {
         if !ovr {
             write_atomic(&bp, v);
@@ -413,12 +418,24 @@ fn produce(blob: &[u8], hash: u64, rtfmt: &[u8; 8], key: u64) -> Result<Vec<u8>,
     r
 }
 
-fn cell(key: u64) -> Arc<OnceLock<Cached>> {
+fn cell(key: u64) -> CacheCell {
     let cache = CACHE.get_or_init(|| Mutex::new(HashMap::new()));
     cache.lock().unwrap().entry(key).or_insert_with(|| Arc::new(OnceLock::new())).clone()
 }
 
-fn finish(res: Result<Vec<u8>, String>, hash: u64, len: usize, blob: &[u8]) -> Cached {
+fn mesh_root_cell(hash: u64, root: &[u8]) -> CacheCell {
+    let cache = MESH_ROOT_CACHE.get_or_init(|| Mutex::new(HashMap::new()));
+    let mut cache = cache.lock().unwrap();
+    let roots = cache.entry(hash).or_default();
+    if let Some(entry) = roots.get(root) {
+        return entry.clone();
+    }
+    let entry = Arc::new(OnceLock::new());
+    roots.insert(root.to_vec(), entry.clone());
+    entry
+}
+
+fn finish(res: Result<Vec<u8>, String>, hash: u64, len: usize, origin_blob: Option<&[u8]>) -> Cached {
     match res {
         Ok(v) => {
             let n = OK.fetch_add(1, Ordering::Relaxed) + 1;
@@ -427,7 +444,7 @@ fn finish(res: Result<Vec<u8>, String>, hash: u64, len: usize, blob: &[u8]) -> C
             }
             let v = Arc::new(v);
             note_origin_hash(v.as_ptr() as usize, hash);
-            if crate::rtcap::enabled() || crate::hot_reload::enabled() {
+            if let Some(blob) = origin_blob.filter(|_| crate::rtcap::enabled() || crate::hot_reload::enabled()) {
                 ORIGIN.get_or_init(|| Mutex::new(HashMap::new())).lock().unwrap().insert(v.as_ptr() as usize, (hash, Arc::new(blob.to_vec())));
             }
             Ok(v)
@@ -493,7 +510,7 @@ pub fn start_prewarm() {
                     let mut ran = false;
                     c.get_or_init(|| {
                         ran = true;
-                        finish(produce(&blob, h, &rt, key), h, blob.len(), &blob)
+                        finish(produce(&blob, h, &rt, key), h, blob.len(), Some(&blob))
                     });
                     if ran {
                         done += 1;
@@ -541,7 +558,7 @@ pub unsafe fn prefetch(ptr: *const u8, len: usize, rtfmt: [u8; 8]) -> bool {
     }
     let blob = Arc::new(blob.to_vec());
     let job: Job = Box::new(move || {
-        c.get_or_init(|| crate::perf::timed(crate::perf::SHADER, || finish(produce(&blob, hash, &rtfmt, key), hash, blob.len(), &blob)));
+        c.get_or_init(|| crate::perf::timed(crate::perf::SHADER, || finish(produce(&blob, hash, &rtfmt, key), hash, blob.len(), Some(&blob))));
     });
     helper_pool().lock().unwrap_or_else(|e| e.into_inner()).send(job).is_ok()
 }
@@ -566,7 +583,7 @@ pub unsafe fn translate_for_targets(ptr: *const u8, len: usize, rtfmt: [u8; 8]) 
         }
     }
     let t0 = std::time::Instant::now();
-    let entry = c.get_or_init(|| crate::perf::timed(crate::perf::SHADER, || finish(produce(blob, hash, &rtfmt, key), hash, len, blob))).clone();
+    let entry = c.get_or_init(|| crate::perf::timed(crate::perf::SHADER, || finish(produce(blob, hash, &rtfmt, key), hash, len, Some(blob)))).clone();
     let ms = t0.elapsed().as_secs_f64() * 1000.0;
     if ms > 50.0 {
         static SL: AtomicUsize = AtomicUsize::new(0);
@@ -577,6 +594,25 @@ pub unsafe fn translate_for_targets(ptr: *const u8, len: usize, rtfmt: [u8; 8]) 
     entry
 }
 
+pub fn needs_external_root_data(blob: &[u8]) -> bool {
+    (32..=0x40_0000).contains(&blob.len())
+        && tombox_xshader::Dxbc::parse(blob).is_ok_and(|dxbc| dxbc.chunk(b"RTS0").is_none())
+}
+
+pub fn translate_mesh_with_root(blob: &[u8], root: &[u8]) -> Cached {
+    let hash = fnv1a(blob);
+    let entry = mesh_root_cell(hash, root);
+    // The existing by-blob cache, replay, and prewarming cannot restore a pipeline root
+    // signature. Keep these inputs separate and let the generated-HLSL disk cache handle DXC.
+    entry.get_or_init(|| {
+        crate::perf::timed(crate::perf::SHADER, || {
+            let result = std::panic::catch_unwind(|| translate_uncached(blob, hash, &[0; 8], Some(root)))
+                .unwrap_or_else(|_| Err("translator panicked".to_string()));
+            finish(result, hash, blob.len(), None)
+        })
+    }).clone()
+}
+
 pub fn counts() -> (usize, usize) {
     (OK.load(Ordering::Relaxed), FAIL.load(Ordering::Relaxed))
 }
@@ -584,6 +620,25 @@ pub fn counts() -> (usize, usize) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn mesh_pipeline_root_cache_separates_layouts_and_keeps_embedded_roots() {
+        let body = [0; 24];
+        let embedded = crate::device_wrap::wrap_root_signature(&body);
+        assert!(!needs_external_root_data(&embedded));
+        let mut stripped = embedded[..32].to_vec();
+        stripped[24..28].copy_from_slice(&32u32.to_le_bytes());
+        stripped[28..32].fill(0);
+        assert!(needs_external_root_data(&stripped));
+        assert!(!needs_external_root_data(&stripped[..31]));
+
+        let hash = fnv1a(&stripped);
+        let root_a = mesh_root_cell(hash, &[1, 2, 3]);
+        let root_b = mesh_root_cell(hash, &[1, 2, 4]);
+        assert!(Arc::ptr_eq(&root_a, &mesh_root_cell(hash, &[1, 2, 3])));
+        assert!(!Arc::ptr_eq(&root_a, &root_b));
+        assert!(!Arc::ptr_eq(&root_a, &cell(cache_key(hash, &[0; 8]))));
+    }
 
     #[test]
     fn fxc_refuses_sm6_profiles() {
@@ -610,7 +665,7 @@ mod tests {
 
     #[test]
     fn translated_code_keeps_console_hash_for_profiler() {
-        let out = finish(Ok(vec![1, 2, 3, 4]), 0x1234_5678_9abc_def0, 4, &[9, 9, 9, 9]).unwrap();
+        let out = finish(Ok(vec![1, 2, 3, 4]), 0x1234_5678_9abc_def0, 4, Some(&[9, 9, 9, 9])).unwrap();
         assert_eq!(origin_hash(out.as_ptr() as usize), Some(0x1234_5678_9abc_def0));
         assert_eq!(origin_hash(1), None);
     }

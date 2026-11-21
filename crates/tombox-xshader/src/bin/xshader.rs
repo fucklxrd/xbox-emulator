@@ -1,28 +1,35 @@
 //! CLI: extract native RDNA2 ISA from an Xbox Series shader DXBC blob.
 //!
-//! Usage: xshader <shader.dxbc> [--isa-out <file.bin>] [--fssm-out <file.bin>]
+//! Usage: xshader <shader.dxbc> [--root-signature <file>] [--hlsl-out <file>]
+//!        [--isa-out <file.bin>] [--fssm-out <file.bin>]
 //!
 //! Prints the DXBC→XDAT→zlib→FSSM→RDNA2 chain it walked and a hex/word dump of the ISA.
 
 use std::process::ExitCode;
-use tombox_xshader::{extract, Stage};
+use tombox_xshader::{extract, parse_root_signature, Stage};
 
 fn main() -> ExitCode {
     let args: Vec<String> = std::env::args().collect();
     if args.len() < 2 {
-        eprintln!("usage: {} <shader.dxbc> [--isa-out f] [--fssm-out f]", args[0]);
+        eprintln!("usage: {} <shader.dxbc> [--root-signature f] [--hlsl-out f] [--isa-out f] [--fssm-out f]", args[0]);
         return ExitCode::FAILURE;
     }
     let path = &args[1];
     let mut isa_out = None;
     let mut fssm_out = None;
     let mut hlsl_out: Option<String> = None;
+    let mut root_signature = None;
     let mut i = 2;
-    while i + 1 < args.len() {
+    while i < args.len() {
+        if i + 1 == args.len() {
+            eprintln!("missing file argument for {}", args[i]);
+            return ExitCode::FAILURE;
+        }
         match args[i].as_str() {
             "--isa-out" => isa_out = Some(args[i + 1].clone()),
             "--fssm-out" => fssm_out = Some(args[i + 1].clone()),
             "--hlsl-out" => hlsl_out = Some(args[i + 1].clone()),
+            "--root-signature" => root_signature = Some(&args[i + 1]),
             other => eprintln!("warning: ignoring unknown arg {other}"),
         }
         i += 2;
@@ -36,13 +43,25 @@ fn main() -> ExitCode {
         }
     };
 
-    let ex = match extract(&blob) {
+    let mut ex = match extract(&blob) {
         Ok(ex) => ex,
         Err(e) => {
             eprintln!("extract failed: {e}");
             return ExitCode::FAILURE;
         }
     };
+    if let Some(path) = root_signature {
+        let signature = std::fs::read(path)
+            .map_err(|e| e.to_string())
+            .and_then(|bytes| parse_root_signature(&bytes));
+        match signature {
+            Ok(signature) => ex.root_sig = Some(signature),
+            Err(e) => {
+                eprintln!("cannot load root signature {path}: {e}");
+                return ExitCode::FAILURE;
+            }
+        }
+    }
 
     let stage = match ex.stage {
         Stage::Pixel => "Pixel".into(),
@@ -83,7 +102,8 @@ fn main() -> ExitCode {
         println!("  psv0 resource: type={} space={} reg={}..{}", r.res_type, r.space, r.lower, r.upper);
     }
     if let Some(rs) = &ex.root_sig {
-        println!("  rootsig v{} flags={:#x} staticSamplers={}", rs.version, rs.flags, rs.num_static_samplers);
+        let source = root_signature.map_or("embedded", |path| path.as_str());
+        println!("  rootsig v{} flags={:#x} staticSamplers={} source={source}", rs.version, rs.flags, rs.num_static_samplers);
         for (i, p) in rs.params.iter().enumerate() {
             println!("    param[{i}] vis={} {:?}", p.visibility, p.kind);
         }
@@ -162,6 +182,9 @@ fn main() -> ExitCode {
             }
             Err(e) => {
                 eprintln!("translate failed: {e}");
+                if ex.root_sig.is_none() {
+                    eprintln!("Supply the pipeline's root signature with --root-signature if the shader depends on it.");
+                }
                 return ExitCode::FAILURE;
             }
         }
