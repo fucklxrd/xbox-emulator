@@ -111,15 +111,20 @@ fn w(s: &str) -> Vec<u16> {
     s.encode_utf16().chain(Some(0)).collect()
 }
 
+unsafe fn module_path(h: *mut c_void) -> Option<PathBuf> {
+    use std::os::windows::ffi::OsStringExt;
+
+    let mut buf = [0u16; 1024];
+    let n = GetModuleFileNameW(h, buf.as_mut_ptr(), buf.len() as u32) as usize;
+    (n != 0 && n < buf.len()).then(|| std::ffi::OsString::from_wide(&buf[..n]).into())
+}
+
 unsafe fn module_of(addr: usize) -> Option<String> {
     let mut h: *mut c_void = core::ptr::null_mut();
     if addr == 0 || GetModuleHandleExW(6, addr as *const u16, &mut h) == 0 {
         return None;
     }
-    let mut buf = [0u16; 1024];
-    let n = GetModuleFileNameW(h, buf.as_mut_ptr(), buf.len() as u32) as usize;
-    let p = String::from_utf16_lossy(&buf[..n]);
-    Some(p.rsplit('\\').next().unwrap_or(&p).to_string())
+    Some(module_path(h)?.file_name()?.to_string_lossy().into_owned())
 }
 
 fn mod_name(addr: usize) -> String {
@@ -886,15 +891,15 @@ fn stage(dir: &Path, order: &[String]) -> Result<(PathBuf, Vec<String>), String>
     Ok((st, have))
 }
 
-fn setup_env(st: &Path) -> PathBuf {
+fn setup_env(st: &Path, load_only: bool) -> PathBuf {
     for k in ["TOMBOX_GDK_OWNER", "TOMBOX_NET_GUARD_OWNER", "TOMBOX_OSHOST_OWNER", "TOMBOX_OSHOST_SIGNAL", "TOMBOX_NET_INPROC_PORT", "TOMBOX_NET_LOCAL_PORT", "TOMBOX_PAD_OWNER", "TOMBOX_ALLOW_NETWORK", "TOMBOX_GDK_XASYNC", "TOMBOX_GDK_USER_HANDLE"] {
         std::env::remove_var(k);
     }
     let log = st.join("tombox_compat.log");
     let _ = std::fs::remove_file(&log);
     std::env::set_var("TOMBOX_GDK_RUNTIME", "1");
-    std::env::set_var("TOMBOX_NET_REDIRECT", "127.0.0.1");
-    std::env::set_var("TOMBOX_NET_BACKEND", "builtin");
+    std::env::set_var("TOMBOX_NET_REDIRECT", if load_only { "" } else { "127.0.0.1" });
+    std::env::set_var("TOMBOX_NET_BACKEND", if load_only { "" } else { "builtin" });
     std::env::set_var("TOMBOX_LOG", &log);
     std::env::set_var("TOMBOX_GDK_ROOT", st.join("gdk"));
     std::env::set_var("TOMBOX_PAD_DIR", st.join("pad"));
@@ -1112,7 +1117,7 @@ fn epic_flow() {
 fn main() {
     let args: Vec<String> = std::env::args().collect();
     if args.iter().any(|a| a == "-h" || a == "--help") {
-        println!("xhost [--dir <dll dir>] [--order a.dll,b.dll,...] [--net-trigger xmem|mfplat] [--step-ms N] [--async real|emulated] [--no-epic] [--repeat N] [--json <file>]");
+        println!("xhost [--dir <dll dir>] [--order a.dll,b.dll,...] [--net-trigger xmem|mfplat] [--step-ms N] [--async real|emulated] [--no-epic] [--load-only] [--repeat N] [--json <file>]");
         println!("default dir: target-qa\\release (or debug); default order (game import order): {GAME_ORDER}");
         return;
     }
@@ -1123,7 +1128,12 @@ fn main() {
     let order: Vec<String> = arg(&args, "--order").unwrap_or_else(|| GAME_ORDER.into()).split(',').map(|s| s.trim().to_string()).filter(|s| !s.is_empty()).collect();
     let trigger = arg(&args, "--net-trigger").unwrap_or_else(|| "xmem".into());
     let repeat: usize = arg(&args, "--repeat").and_then(|v| v.parse().ok()).unwrap_or(1).max(1);
-    let epic = !args.iter().any(|a| a == "--no-epic");
+    let load_only = args.iter().any(|a| a == "--load-only");
+    if load_only && order.is_empty() {
+        eprintln!("--load-only requires at least one DLL in the load order");
+        std::process::exit(2);
+    }
+    let epic = !load_only && !args.iter().any(|a| a == "--no-epic");
     if args.iter().any(|a| a == "--audio") {
         let frames = arg(&args, "--frames").and_then(|v| v.parse().ok()).unwrap_or(300);
         if args.iter().any(|a| a == "--gc2") {
@@ -1154,7 +1164,7 @@ fn main() {
         println!("heapcheck: HeapValidate on all process heaps after every step");
     }
     if let Some(j) = arg(&args, "--json") {
-        let cfg = serde_json::json!({"dir": dir.display().to_string(), "order": order, "net_trigger": trigger, "repeat": repeat, "epic": epic, "step_ms": STEP_MS.load(Ordering::Relaxed)}).to_string();
+        let cfg = serde_json::json!({"dir": dir.display().to_string(), "order": order, "net_trigger": trigger, "repeat": repeat, "epic": epic, "load_only": load_only, "step_ms": STEP_MS.load(Ordering::Relaxed)}).to_string();
         *JSON_OUT.lock().unwrap() = Some((PathBuf::from(j), cfg));
     }
     println!("xhost: dll dir {}; order {}; net_guard trigger {trigger}", dir.display(), order.join(" > "));
@@ -1165,7 +1175,7 @@ fn main() {
             std::process::exit(3);
         }
     };
-    let log = setup_env(&st);
+    let log = setup_env(&st, load_only);
     if let Some(a) = arg(&args, "--async") {
         std::env::set_var("TOMBOX_GDK_XASYNC", a);
     }
@@ -1183,11 +1193,25 @@ fn main() {
             if h.is_null() {
                 return fail(format!("LoadLibraryW({}) err={}", p.display(), GetLastError()));
             }
-            let loaded = mod_name(h as usize);
-            check(loaded.eq_ignore_ascii_case(&n), || format!("loaded module is {loaded}, not the staged {n}"))?;
+            if load_only {
+                let loaded = module_path(h).ok_or_else(|| Out::Fail("GetModuleFileNameW could not identify the loaded DLL".into()))?;
+                let actual = loaded.canonicalize().map_err(|e| Out::Fail(format!("resolve {}: {e}", loaded.display())))?;
+                let expected = p.canonicalize().map_err(|e| Out::Fail(format!("resolve {}: {e}", p.display())))?;
+                check(actual == expected, || format!("loaded {} instead of {}", actual.display(), expected.display()))?;
+            } else {
+                let loaded = mod_name(h as usize);
+                check(loaded.eq_ignore_ascii_case(&n), || format!("loaded module is {loaded}, not the staged {n}"))?;
+            }
             with(|c| c.modules.push((n.clone(), h as usize)));
             Ok(format!("base {:#x}", h as usize))
         });
+    }
+
+    if load_only {
+        if have.is_empty() {
+            report("load order", Out::Fail("none of the requested DLLs were staged".into()));
+        }
+        finish();
     }
 
     step("ownership after load", || {

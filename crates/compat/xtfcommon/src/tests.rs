@@ -1,7 +1,11 @@
+#[cfg(windows)]
 use crate::msvc::*;
+#[cfg(windows)]
 use crate::printf::*;
+#[cfg(windows)]
 use crate::sys::*;
 
+#[cfg(windows)]
 #[test]
 fn wstring_grows_like_msvc() {
     unsafe {
@@ -19,6 +23,7 @@ fn wstring_grows_like_msvc() {
     }
 }
 
+#[cfg(windows)]
 #[test]
 fn format_alloc_fixes_line_endings() {
     unsafe {
@@ -54,6 +59,7 @@ fn alias_rows_link_to_their_target() {
     assert_eq!(crate::exports::internal_symbol(&e[0]), "Bar");
 }
 
+#[cfg(windows)]
 #[test]
 fn shared_ptr_counts() {
     unsafe {

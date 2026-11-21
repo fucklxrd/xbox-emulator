@@ -385,6 +385,7 @@ fn process(blob: &[u8], compile: bool) -> (String, Result<(), String>, bool) {
                         Err(e) => (st, Err(e), true),
                     }
                 }
+                #[cfg(windows)]
                 Ok(t) => {
                     // Default: DXC (shader model 6.0), in process.
                     let profile = tombox_xshader::dxc::profile_for(t.profile);
@@ -405,6 +406,8 @@ fn process(blob: &[u8], compile: bool) -> (String, Result<(), String>, bool) {
                         Err(e) => (st, Err(e), true),
                     }
                 }
+                #[cfg(not(windows))]
+                Ok(_) => (st, Err("shader compile mode needs Windows".into()), false),
             }
         }
     });
@@ -439,6 +442,12 @@ fn main() -> ExitCode {
         }
         i += 2;
     }
+    #[cfg(not(windows))]
+    if compile {
+        eprintln!("shader compile mode needs Windows");
+        return ExitCode::FAILURE;
+    }
+
     let data = match std::fs::read(&args[1]) {
         Ok(d) => d,
         Err(e) => {

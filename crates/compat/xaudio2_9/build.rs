@@ -13,6 +13,7 @@ const EXPORTS: &[(&str, &str, u32)] = &[
     ("XAudio2CreateWithSharedContexts", "XAudio2CreateWithSharedContexts", 10),
 ];
 
+#[cfg(windows)]
 fn find_lib_exe() -> Option<PathBuf> {
     let host = |dir: PathBuf| -> Option<PathBuf> {
         let p = dir.join("bin").join("HostX64").join("x64").join("lib.exe");
@@ -57,6 +58,23 @@ fn main() {
     if !msvc {
         return;
     }
+    emit_exports(&out_dir);
+}
+
+#[cfg(not(windows))]
+fn emit_exports(_: &std::path::Path) {
+    for (name, target, ordinal) in EXPORTS {
+        let symbol = if name == target {
+            (*name).to_owned()
+        } else {
+            format!("{name}={target}")
+        };
+        println!("cargo:rustc-cdylib-link-arg=/EXPORT:{symbol},@{ordinal}");
+    }
+}
+
+#[cfg(windows)]
+fn emit_exports(out_dir: &std::path::Path) {
     let mut def = String::from("LIBRARY XAudio2_9\nEXPORTS\n");
     for (name, target, ord) in EXPORTS {
         if name == target {

@@ -14,5 +14,5 @@ path = "src/lib.rs"
 compat-common = { path = "../compat-common" }
 tombox-xshader = { path = "../../tombox-xshader" }
 
-[build-dependencies]
+[target.'cfg(windows)'.build-dependencies]
 tombox-xshader = { path = "../../tombox-xshader" }

@@ -41,7 +41,16 @@ cargo test -p <crate>
 
 The public source checkout can build `compat-common` without title data. Its built-in title services and their integration tests require a local `crates/compat/compat-common/backend_data/` directory with the Fortnite, XDefiant, and Trackmania inputs referenced by the service code. Requests to start the built-in backend in a source-only build fail explicitly.
 
-Some crates also need third-party SDKs (the DirectX Agility SDK, DXC, libopus). Their `build.rs` says which.
+Some crates also need third-party SDKs (the DirectX Agility SDK, DXC, libopus). Their `build.rs` says which. The `d3d12_xs` build compiles its query shader from HLSL. On Windows, install the Windows SDK or set `TOMBOX_DXC_DIR` to the folder containing `dxcompiler.dll` and `dxil.dll`. Set `TOMBOX_DXC` to use a host DXC executable instead. Cross-checking from a non-Windows host uses `dxc` on `PATH` unless `TOMBOX_DXC` is set.
+
+## Runtime load smoke test
+
+On Windows x64, build the DLLs that the host harness loads by default, then run the harness in load-only mode. This checks that Windows loads each DLL from the staged build outputs and requires no title files.
+
+```powershell
+cargo build --locked --release -p xhost -p mfplat -p xaudio2_9 -p xmem -p d3d12_xs -p xcrdapi -p dxcompiler_xs -p acphal -p audiohalwrapper
+.\target\release\xhost.exe --dir target\release --load-only
+```
 
 ## Licence
 

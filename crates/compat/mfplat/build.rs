@@ -59,6 +59,7 @@ fn pe_export_names(bytes: &[u8]) -> Option<Vec<String>> {
     Some(out)
 }
 
+#[cfg(windows)]
 fn find_lib_exe() -> Option<PathBuf> {
     let host = |dir: PathBuf| -> Option<PathBuf> {
         let p = dir.join("bin").join("HostX64").join("x64").join("lib.exe");
@@ -121,28 +122,7 @@ fn main() {
     let out_dir = PathBuf::from(std::env::var("OUT_DIR").unwrap());
     let msvc = std::env::var("CARGO_CFG_TARGET_ENV").map(|e| e == "msvc").unwrap_or(false);
     if msvc {
-        let mut def = String::from("LIBRARY mfplat\nEXPORTS\n");
-        for n in NATIVE.iter().filter(|n| **n != SURFACE_ALIAS.0) {
-            def.push_str(&format!("    {n}\n"));
-        }
-        for n in &forwarded {
-            def.push_str(&format!("    {n}=mfplat_sys.{n}\n"));
-        }
-        def.push_str(&format!("    {}=mfplat_sys.{}\n", SURFACE_ALIAS.0, SURFACE_ALIAS.1));
-        let def_path = out_dir.join("mfplat_forward.def");
-        let lib_path = out_dir.join("mfplat_forward.lib");
-        let exp_path = out_dir.join("mfplat_forward.exp");
-        std::fs::write(&def_path, def).unwrap();
-        let lib = find_lib_exe().expect("lib.exe (MSVC librarian) not found: needed to build the mfplat forwarder export table");
-        let st = std::process::Command::new(&lib)
-            .arg("/NOLOGO")
-            .arg("/MACHINE:X64")
-            .arg(format!("/DEF:{}", def_path.display()))
-            .arg(format!("/OUT:{}", lib_path.display()))
-            .status()
-            .unwrap_or_else(|e| panic!("{}: {e}", lib.display()));
-        assert!(st.success() && exp_path.exists(), "lib.exe failed to produce {}", exp_path.display());
-        println!("cargo:rustc-cdylib-link-arg={}", exp_path.display());
+        emit_exports(&out_dir, &forwarded);
     }
 
     let mut rs = String::new();
@@ -159,4 +139,42 @@ fn main() {
     rs.push_str("];\n");
     rs.push_str(&format!("pub static FORWARDED_ALIASES: &[(&str, &str)] = &[({:?}, {:?})];\n", SURFACE_ALIAS.0, SURFACE_ALIAS.1));
     std::fs::write(out_dir.join("forwarded.rs"), rs).unwrap();
+}
+
+#[cfg(not(windows))]
+fn emit_exports(_: &std::path::Path, forwarded: &BTreeSet<String>) {
+    for name in NATIVE.iter().filter(|name| **name != SURFACE_ALIAS.0) {
+        println!("cargo:rustc-cdylib-link-arg=/EXPORT:{name}");
+    }
+    for name in forwarded {
+        println!("cargo:rustc-cdylib-link-arg=/EXPORT:{name}=mfplat_sys.{name}");
+    }
+    let (alias, target) = SURFACE_ALIAS;
+    println!("cargo:rustc-cdylib-link-arg=/EXPORT:{alias}=mfplat_sys.{target}");
+}
+
+#[cfg(windows)]
+fn emit_exports(out_dir: &std::path::Path, forwarded: &BTreeSet<String>) {
+    let mut def = String::from("LIBRARY mfplat\nEXPORTS\n");
+    for n in NATIVE.iter().filter(|n| **n != SURFACE_ALIAS.0) {
+        def.push_str(&format!("    {n}\n"));
+    }
+    for n in forwarded {
+        def.push_str(&format!("    {n}=mfplat_sys.{n}\n"));
+    }
+    def.push_str(&format!("    {}=mfplat_sys.{}\n", SURFACE_ALIAS.0, SURFACE_ALIAS.1));
+    let def_path = out_dir.join("mfplat_forward.def");
+    let lib_path = out_dir.join("mfplat_forward.lib");
+    let exp_path = out_dir.join("mfplat_forward.exp");
+    std::fs::write(&def_path, def).unwrap();
+    let lib = find_lib_exe().expect("lib.exe (MSVC librarian) not found: needed to build the mfplat forwarder export table");
+    let st = std::process::Command::new(&lib)
+        .arg("/NOLOGO")
+        .arg("/MACHINE:X64")
+        .arg(format!("/DEF:{}", def_path.display()))
+        .arg(format!("/OUT:{}", lib_path.display()))
+        .status()
+        .unwrap_or_else(|e| panic!("{}: {e}", lib.display()));
+    assert!(st.success() && exp_path.exists(), "lib.exe failed to produce {}", exp_path.display());
+    println!("cargo:rustc-cdylib-link-arg={}", exp_path.display());
 }
