@@ -21,7 +21,8 @@ use windows::Win32::Graphics::Dxgi::Common::DXGI_FORMAT_NV12;
 use windows::Win32::Media::MediaFoundation::*;
 use windows::Win32::System::Com::{CoCreateInstance, CoInitializeEx, CLSCTX_INPROC_SERVER, COINIT_MULTITHREADED};
 
-const STREAM: &[u8] = include_bytes!("data/black_640x360_30f.h264");
+#[path = "common/media.rs"]
+mod media;
 const CLSID_MSH264_DECODER: GUID = GUID::from_u128(0x62ce7e72_4c71_4d20_b15d_452831a87d9d);
 const MF_SA_D3D12_AWARE: GUID = GUID::from_u128(0x77e4a1b1_66bb_4ba4_9cd6_b1c1fbc6b5ee);
 const MF_VERSION_FULL: u32 = 0x0002_0070;
@@ -242,13 +243,14 @@ fn configure(t: &IMFTransform) {
 }
 
 fn input_sample() -> IMFSample {
+    let stream = media::black_h264();
     unsafe {
-        let buf = MFCreateMemoryBuffer(STREAM.len() as u32).unwrap();
+        let buf = MFCreateMemoryBuffer(stream.len() as u32).unwrap();
         let mut p: *mut u8 = core::ptr::null_mut();
         buf.Lock(&mut p, None, None).unwrap();
-        core::ptr::copy_nonoverlapping(STREAM.as_ptr(), p, STREAM.len());
+        core::ptr::copy_nonoverlapping(stream.as_ptr(), p, stream.len());
         buf.Unlock().unwrap();
-        buf.SetCurrentLength(STREAM.len() as u32).unwrap();
+        buf.SetCurrentLength(stream.len() as u32).unwrap();
         let s = MFCreateSample().unwrap();
         s.AddBuffer(&buf).unwrap();
         s.SetSampleTime(0).unwrap();

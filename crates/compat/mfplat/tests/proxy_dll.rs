@@ -1,3 +1,6 @@
+#[path = "common/media.rs"]
+mod media;
+
 use core::ffi::c_void;
 use core::sync::atomic::{AtomicU32, Ordering};
 #[path = "../src/reset.rs"]
@@ -1137,9 +1140,7 @@ fn fortnite_movies_decode_to_nonblack_rgb32_on_console_d3d12_manager() {
 
 #[test]
 fn lobby_video_placeholder_decodes_to_nonblack_frames_on_every_path() {
-    let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("..").join("compat-common").join("backend_data").join("fortnite").join("video");
-    let mut clip = std::fs::read(root.join("init.mp4")).expect("placeholder init.mp4");
-    clip.extend(std::fs::read(root.join("seg0.m4s")).expect("placeholder seg0.m4s"));
+    let clip = media::staged_fragment("init.mp4", "seg0.m4s").unwrap_or_else(media::patterned_h264);
     let dir = std::env::temp_dir().join(format!("tombox_placeholder_{}", std::process::id()));
     std::fs::create_dir_all(&dir).unwrap();
     let path = dir.join("lobby_placeholder.mp4");

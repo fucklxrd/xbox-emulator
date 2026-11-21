@@ -3,8 +3,8 @@ use windows::core::GUID;
 use windows::Win32::Media::MediaFoundation::*;
 use windows::Win32::System::Com::{CoCreateInstance, CoInitializeEx, CLSCTX_INPROC_SERVER, COINIT_MULTITHREADED};
 
-const INIT: &[u8] = include_bytes!("../../compat-common/backend_data/fortnite/video/audio_init.mp4");
-const SEG: &[u8] = include_bytes!("../../compat-common/backend_data/fortnite/video/audio_seg0.m4s");
+#[path = "common/media.rs"]
+mod media;
 const CLSID_MSAAC_DECODER: GUID = GUID::from_u128(0x32d186a7_218f_4c75_8876_dd77273a8999);
 const MF_E_NOTACCEPTING: i32 = 0xC00D_36B5u32 as i32;
 const MF_E_TRANSFORM_NEED_MORE_INPUT: i32 = 0xC00D_6D72u32 as i32;
@@ -51,9 +51,9 @@ fn find(b: &[u8], path: &[&str]) -> Option<(usize, usize)> {
     None
 }
 
-fn audio_specific_config() -> Vec<u8> {
-    let (o, size) = find(INIT, &["moov", "trak", "mdia", "minf", "stbl", "stsd", "mp4a", "esds"]).expect("esds");
-    let d = &INIT[o + 12..o + size];
+fn audio_specific_config(clip: &[u8]) -> Vec<u8> {
+    let (o, size) = find(clip, &["moov", "trak", "mdia", "minf", "stbl", "stsd", "mp4a", "esds"]).expect("esds");
+    let d = &clip[o + 12..o + size];
     let mut i = 0;
     while i < d.len() {
         let tag = d[i];
@@ -77,24 +77,24 @@ fn audio_specific_config() -> Vec<u8> {
     panic!("no DecoderSpecificInfo in esds");
 }
 
-fn access_units() -> Vec<Vec<u8>> {
-    let (moof, _) = find(SEG, &["moof"]).expect("moof");
-    let (tfhd, _) = find(SEG, &["moof", "traf", "tfhd"]).expect("tfhd");
-    let (trun, _) = find(SEG, &["moof", "traf", "trun"]).expect("trun");
-    let tf = be32(SEG, tfhd + 8) & 0xff_ffff;
+fn access_units(clip: &[u8]) -> Vec<Vec<u8>> {
+    let (moof, _) = find(clip, &["moof"]).expect("moof");
+    let (tfhd, _) = find(clip, &["moof", "traf", "tfhd"]).expect("tfhd");
+    let (trun, _) = find(clip, &["moof", "traf", "trun"]).expect("trun");
+    let tf = be32(clip, tfhd + 8) & 0xff_ffff;
     let mut p = tfhd + 16;
     for bit in [0x1usize, 0x2, 0x8] {
         if tf & bit != 0 {
             p += if bit == 0x1 { 8 } else { 4 };
         }
     }
-    let default_size = if tf & 0x10 != 0 { be32(SEG, p) } else { 0 };
-    let flags = be32(SEG, trun + 8) & 0xff_ffff;
-    let count = be32(SEG, trun + 12);
+    let default_size = if tf & 0x10 != 0 { be32(clip, p) } else { 0 };
+    let flags = be32(clip, trun + 8) & 0xff_ffff;
+    let count = be32(clip, trun + 12);
     let mut q = trun + 16;
     let mut data = moof;
     if flags & 0x1 != 0 {
-        data = moof + be32(SEG, q);
+        data = moof + be32(clip, q);
         q += 4;
     }
     if flags & 0x4 != 0 {
@@ -106,7 +106,7 @@ fn access_units() -> Vec<Vec<u8>> {
             q += 4;
         }
         let size = if flags & 0x200 != 0 {
-            let s = be32(SEG, q);
+            let s = be32(clip, q);
             q += 4;
             s
         } else {
@@ -118,7 +118,7 @@ fn access_units() -> Vec<Vec<u8>> {
         if flags & 0x800 != 0 {
             q += 4;
         }
-        out.push(SEG[data..data + size].to_vec());
+        out.push(clip[data..data + size].to_vec());
         data += size;
     }
     out
@@ -182,9 +182,11 @@ fn served_aac_rendition_decodes_like_electra() {
         let _ = CoInitializeEx(None, COINIT_MULTITHREADED);
         MFStartup(0x0002_0070, MFSTARTUP_FULL).unwrap();
     }
-    let asc = audio_specific_config();
+    let clip = media::staged_fragment("audio_init.mp4", "audio_seg0.m4s")
+        .unwrap_or_else(media::silent_aac);
+    let asc = audio_specific_config(&clip);
     assert_eq!(asc[..2], [0x11, 0x90], "AAC-LC 48 kHz stereo AudioSpecificConfig");
-    let aus = access_units();
+    let aus = access_units(&clip);
     assert!(aus.len() >= 40, "{} access units", aus.len());
     let t: IMFTransform = unsafe { CoCreateInstance(&CLSID_MSAAC_DECODER, None, CLSCTX_INPROC_SERVER) }.expect("CMSAACDecMFT");
     let mt = unsafe { MFCreateMediaType() }.unwrap();

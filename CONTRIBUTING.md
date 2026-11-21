@@ -43,6 +43,8 @@ The public source checkout can build `compat-common` without title data. Its bui
 
 Some crates also need third-party SDKs (the DirectX Agility SDK, DXC, libopus). Their `build.rs` says which. The `d3d12_xs` build compiles its query shader from HLSL. On Windows, install the Windows SDK or set `TOMBOX_DXC_DIR` to the folder containing `dxcompiler.dll` and `dxil.dll`. Set `TOMBOX_DXC` to use a host DXC executable instead. Cross-checking from a non-Windows host uses `dxc` on `PATH` unless `TOMBOX_DXC` is set.
 
+The `mfplat` integration tests can generate synthetic AAC and H.264 inputs when local fixtures are absent. Install FFmpeg with libx264 on `PATH` or set `TOMBOX_FFMPEG` to its executable.
+
 ## Runtime load smoke test
 
 On Windows x64, build the DLLs that the host harness loads by default, then run the harness in load-only mode. This checks that Windows loads each DLL from the staged build outputs and requires no title files.
