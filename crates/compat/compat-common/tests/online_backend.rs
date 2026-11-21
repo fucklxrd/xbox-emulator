@@ -1,3 +1,5 @@
+#![cfg(tombox_backend_data)]
+
 use compat_common::online::{fortnite::Fortnite, http, util};
 use serde_json::Value;
 use std::io::{BufRead, BufReader, Read, Write};

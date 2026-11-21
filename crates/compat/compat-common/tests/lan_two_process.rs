@@ -1,3 +1,5 @@
+#![cfg(tombox_backend_data)]
+
 use compat_common::online::lan::{self, Role};
 use serde_json::{json, Value};
 use std::net::UdpSocket;

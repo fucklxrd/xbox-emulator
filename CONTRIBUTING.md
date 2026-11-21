@@ -39,6 +39,8 @@ cargo build -p <crate>
 cargo test -p <crate>
 ```
 
+The public source checkout can build `compat-common` without title data. Its built-in title services and their integration tests require a local `crates/compat/compat-common/backend_data/` directory with the Fortnite, XDefiant, and Trackmania inputs referenced by the service code. Requests to start the built-in backend in a source-only build fail explicitly.
+
 Some crates also need third-party SDKs (the DirectX Agility SDK, DXC, libopus). Their `build.rs` says which.
 
 ## Licence

@@ -58,6 +58,16 @@ fn esc(s: &str) -> String {
 
 fn main() {
     let here = PathBuf::from(std::env::var("CARGO_MANIFEST_DIR").unwrap());
+    let backend_data = here.join("backend_data");
+    println!("cargo:rustc-check-cfg=cfg(tombox_backend_data)");
+    // Watch the crate directory until the locally staged backend data is added.
+    let watch = if backend_data.is_dir() {
+        println!("cargo:rustc-cfg=tombox_backend_data");
+        &backend_data
+    } else {
+        &here
+    };
+    println!("cargo:rerun-if-changed={}", watch.display());
     let compat = here.parent().unwrap().to_path_buf();
     let hosts = here.join("data").join("console_apiset_hosts.txt");
     println!("cargo:rerun-if-changed={}", hosts.display());

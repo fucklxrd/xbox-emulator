@@ -1,3 +1,5 @@
+#![cfg(tombox_backend_data)]
+
 use std::io::{BufRead, BufReader, Read, Write};
 use std::net::TcpStream;
 use std::time::Duration;

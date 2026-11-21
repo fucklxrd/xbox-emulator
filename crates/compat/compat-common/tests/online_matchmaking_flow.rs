@@ -1,3 +1,5 @@
+#![cfg(tombox_backend_data)]
+
 use serde_json::{json, Value};
 use std::io::{BufRead, BufReader, Read, Write};
 use std::net::TcpStream;

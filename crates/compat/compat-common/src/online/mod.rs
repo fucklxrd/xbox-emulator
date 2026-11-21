@@ -1,18 +1,32 @@
+#[cfg(tombox_backend_data)]
 pub mod http;
 pub mod util;
+#[cfg(tombox_backend_data)]
 pub mod fortnite;
+#[cfg(tombox_backend_data)]
 pub mod xdefiant;
+#[cfg(tombox_backend_data)]
 pub mod ws;
+#[cfg(tombox_backend_data)]
 pub mod xmpp;
+#[cfg(tombox_backend_data)]
 pub mod epic_extra;
+#[cfg(tombox_backend_data)]
 pub mod xboxlive;
+#[cfg(tombox_backend_data)]
 pub mod rta;
+#[cfg(tombox_backend_data)]
 pub mod trackmania;
+#[cfg(tombox_backend_data)]
 pub mod playfab;
+#[cfg(tombox_backend_data)]
 pub mod lan;
+#[cfg(tombox_backend_data)]
 pub mod xbl_title;
+#[cfg(tombox_backend_data)]
 pub mod mpsd;
 
+#[cfg(tombox_backend_data)]
 pub fn websocket_session(title: &str, req: &Request) -> Option<(Box<dyn ws::WsSession>, Option<String>)> {
     let protos = ws::requested_protocols(req);
     if fortnite::matchmaking::is_mms(req) { return fortnite::matchmaking::websocket(req); }
@@ -30,10 +44,12 @@ pub fn websocket_session(title: &str, req: &Request) -> Option<(Box<dyn ws::WsSe
     }
 }
 
+#[cfg(tombox_backend_data)]
 fn host_exe_is_xdefiant() -> bool {
     std::env::current_exe().ok().and_then(|p| p.file_name().map(|f| f.to_string_lossy().to_ascii_lowercase())).map_or(false, |f| f.starts_with("rogue_"))
 }
 
+#[cfg(tombox_backend_data)]
 use std::sync::OnceLock;
 
 pub struct Request {
@@ -119,6 +135,7 @@ pub trait TitleService: Send + Sync {
     }
 }
 
+#[cfg(tombox_backend_data)]
 pub fn title_for(name: &str) -> Option<Box<dyn TitleService>> {
     let mut n = name.trim().to_ascii_lowercase();
     if n.is_empty() && host_exe_is_xdefiant() {
@@ -139,6 +156,7 @@ pub fn title_for(name: &str) -> Option<Box<dyn TitleService>> {
     }
 }
 
+#[cfg(tombox_backend_data)]
 pub fn dispatch(title: &dyn TitleService, req: &Request) -> Response {
     if req.header("upgrade").map_or(false, |u| u.eq_ignore_ascii_case("websocket")) {
         crate::record_raw("online", "websocket", &format!("[{}] {} {} (websocket upgrade not emulated)", title.name(), req.method, req.path));
@@ -157,6 +175,7 @@ pub fn dispatch(title: &dyn TitleService, req: &Request) -> Response {
     }
 }
 
+#[cfg(tombox_backend_data)]
 static PORT: OnceLock<u16> = OnceLock::new();
 
 pub fn requested() -> bool {
@@ -164,6 +183,7 @@ pub fn requested() -> bool {
     v.trim().eq_ignore_ascii_case("builtin")
 }
 
+#[cfg(tombox_backend_data)]
 pub fn start_for_config() -> std::io::Result<u16> {
     if let Some(p) = PORT.get() {
         return Ok(*p);
@@ -179,6 +199,27 @@ pub fn start_for_config() -> std::io::Result<u16> {
     Ok(port)
 }
 
+#[cfg(tombox_backend_data)]
 pub fn port() -> Option<u16> {
     PORT.get().copied()
+}
+
+#[cfg(not(tombox_backend_data))]
+pub fn start_for_config() -> std::io::Result<u16> {
+    Err(std::io::Error::new(
+        std::io::ErrorKind::Unsupported,
+        "built-in title services require compat-common/backend_data at build time",
+    ))
+}
+
+#[cfg(not(tombox_backend_data))]
+pub fn port() -> Option<u16> {
+    None
+}
+
+#[cfg(all(test, not(tombox_backend_data)))]
+#[test]
+fn source_only_build_cannot_start_a_title_service() {
+    assert_eq!(start_for_config().unwrap_err().kind(), std::io::ErrorKind::Unsupported);
+    assert_eq!(port(), None);
 }
