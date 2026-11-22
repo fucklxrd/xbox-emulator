@@ -90,16 +90,19 @@ fn ps_edits_follow_the_generated_shader_shape_and_refuse_unknown_shapes() {
 
 #[test]
 fn variant_cache_keys_on_the_edit_and_falls_back_on_failure() {
-    let o = PsOrigin { blob: Arc::new(vec![1, 2, 3]), hash: 0x7e57_0001, rtfmt: [0; 8], options: opts(1, 0, 0, 0) };
+    let o = PsOrigin { blob: Arc::new(vec![1, 2, 3]), hash: 0x7e57_0001, rtfmt: [0; 8], options: opts(1, 0, 0, 0), root: None };
     let calls = Mutex::new(0);
     let ok = |_: &[u8], _: u64, _: &[u8; 8], e: &dyn Fn(&str) -> Result<String, String>| -> Result<Vec<u8>, String> {
         *calls.lock().unwrap() += 1;
         e(&ps(false, false)).map(|s| s.into_bytes())
     };
     let a = variant_with(&o, false, &ok).unwrap();
+    let with_root = PsOrigin { root: Some(Arc::from([1u8, 2, 3])), ..o.clone() };
+    let rooted = variant_with(&with_root, false, &ok).unwrap();
+    assert!(!Arc::ptr_eq(&a, &rooted));
     let b = variant_with(&o, true, &ok).unwrap();
     assert!(Arc::ptr_eq(&a, &b));
-    assert_eq!(*calls.lock().unwrap(), 1);
+    assert_eq!(*calls.lock().unwrap(), 2);
     assert!(String::from_utf8_lossy(&a).contains("sample float4 i1"));
     let none = PsOrigin { options: opts(2, 1, 1, 1), hash: 0x7e57_0002, ..o.clone() };
     assert!(variant_with(&none, true, &ok).is_none());

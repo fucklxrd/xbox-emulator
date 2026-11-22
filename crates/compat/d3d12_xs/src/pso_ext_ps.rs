@@ -173,10 +173,12 @@ pub struct PsOrigin {
     pub hash: u64,
     pub rtfmt: [u8; 8],
     pub options: PsOptions,
+    pub root: Option<Arc<[u8]>>,
 }
 
 static ORIGINS: Mutex<Option<HashMap<usize, PsOrigin>>> = Mutex::new(None);
-type VariantCache = HashMap<(u64, [u8; 8], PsEdit), Result<Option<Arc<Vec<u8>>>, String>>;
+type VariantKey = (u64, [u8; 8], PsEdit, Option<Arc<[u8]>>);
+type VariantCache = HashMap<VariantKey, Result<Option<Arc<Vec<u8>>>, String>>;
 static VARIANTS: Mutex<Option<VariantCache>> = Mutex::new(None);
 
 pub fn note_pso(pso: *mut c_void, origin: Option<PsOrigin>) {
@@ -199,12 +201,12 @@ pub fn origin_of(pso: *mut c_void) -> Option<PsOrigin> {
     ORIGINS.lock().unwrap_or_else(|p| p.into_inner()).as_ref().and_then(|m| m.get(&(pso as usize)).cloned())
 }
 
-pub fn origin_from_blob(p: *const u8, n: usize, rtfmt: [u8; 8], options: PsOptions) -> Option<PsOrigin> {
+pub fn origin_from_blob(p: *const u8, n: usize, rtfmt: [u8; 8], options: PsOptions, root: Option<Arc<[u8]>>) -> Option<PsOrigin> {
     if p.is_null() || n == 0 {
         return None;
     }
     let blob = unsafe { core::slice::from_raw_parts(p, n) }.to_vec();
-    Some(PsOrigin { hash: fnv1a(&blob), blob: Arc::new(blob), rtfmt, options })
+    Some(PsOrigin { hash: fnv1a(&blob), blob: Arc::new(blob), rtfmt, options, root })
 }
 
 fn record_once(msg: String) {
@@ -222,7 +224,7 @@ pub fn variant_with(o: &PsOrigin, ds_write: bool, translate: &dyn Fn(&[u8], u64,
     if want.is_empty() {
         return None;
     }
-    let key = (o.hash, o.rtfmt, want);
+    let key = (o.hash, o.rtfmt, want, o.root.clone());
     if let Some(hit) = VARIANTS.lock().unwrap_or_else(|p| p.into_inner()).as_ref().and_then(|m| m.get(&key).cloned()) {
         return hit.ok().flatten();
     }
@@ -258,7 +260,7 @@ pub fn variant_with(o: &PsOrigin, ds_write: bool, translate: &dyn Fn(&[u8], u64,
 }
 
 pub fn variant(o: &PsOrigin, ds_write: bool) -> Option<Arc<Vec<u8>>> {
-    variant_with(o, ds_write, &|b, h, r, e| crate::shader_xlat::translate_edited(b, h, r, e))
+    variant_with(o, ds_write, &|b, h, r, e| crate::shader_xlat::translate_edited_with_root(b, h, r, e, o.root.as_deref()))
 }
 
 #[cfg(test)]

@@ -164,10 +164,6 @@ fn translate_uncached(blob: &[u8], hash: u64, rtfmt: &[u8; 8]) -> Result<Vec<u8>
     translate_uncached_with(blob, hash, rtfmt, None, None)
 }
 
-pub(crate) fn translate_edited(blob: &[u8], hash: u64, rtfmt: &[u8; 8], edit: &dyn Fn(&str) -> Result<String, String>) -> Result<Vec<u8>, String> {
-    translate_edited_with_root(blob, hash, rtfmt, edit, None)
-}
-
 pub(crate) fn translate_edited_with_root(blob: &[u8], hash: u64, rtfmt: &[u8; 8], edit: &dyn Fn(&str) -> Result<String, String>, root: Option<&[u8]>) -> Result<Vec<u8>, String> {
     std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| translate_uncached_with(blob, hash, rtfmt, Some(edit), root))).unwrap_or_else(|_| Err("translator panicked".to_string()))
 }
@@ -627,15 +623,21 @@ pub unsafe fn translate_for_targets(ptr: *const u8, len: usize, rtfmt: [u8; 8]) 
 /// The bytecode must be readable for its stated length. A nonnull root must be a live
 /// ID3D12RootSignature for the duration of translation.
 pub unsafe fn translate_for_pipeline(ptr: *const u8, len: usize, rtfmt: [u8; 8], root: *mut core::ffi::c_void) -> Cached {
-    if !root.is_null() && !ptr.is_null() && (32..=0x40_0000).contains(&len) {
-        let blob = core::slice::from_raw_parts(ptr, len);
-        if needs_external_root_data(blob) {
-            if let Some(data) = crate::console_slots_mesh::root_data(root) {
-                return translate_with_pipeline_root(blob, &data, rtfmt);
-            }
-        }
+    if let Some(data) = external_root_for_shader(ptr, len, root) {
+        return translate_with_pipeline_root(core::slice::from_raw_parts(ptr, len), &data, rtfmt);
     }
     translate_for_targets(ptr, len, rtfmt)
+}
+
+pub(crate) unsafe fn external_root_for_shader(ptr: *const u8, len: usize, root: *mut core::ffi::c_void) -> Option<Vec<u8>> {
+    if root.is_null() || ptr.is_null() || !(32..=0x40_0000).contains(&len) {
+        return None;
+    }
+    let blob = core::slice::from_raw_parts(ptr, len);
+    if !needs_external_root_data(blob) {
+        return None;
+    }
+    crate::console_slots_mesh::root_data(root)
 }
 
 fn needs_external_root_data(blob: &[u8]) -> bool {
@@ -643,7 +645,7 @@ fn needs_external_root_data(blob: &[u8]) -> bool {
         && tombox_xshader::Dxbc::parse(blob).is_ok_and(|dxbc| dxbc.chunk(b"RTS0").is_none())
 }
 
-fn translate_with_pipeline_root(blob: &[u8], root: &[u8], rtfmt: [u8; 8]) -> Cached {
+pub(crate) fn translate_with_pipeline_root(blob: &[u8], root: &[u8], rtfmt: [u8; 8]) -> Cached {
     let hash = fnv1a(blob);
     let entry = pipeline_root_cell((hash, rtfmt), root);
     entry.get_or_init(|| {

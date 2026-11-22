@@ -704,6 +704,7 @@ unsafe extern "system" fn create_gfx_pso_x(
         [0; 8]
     };
     let ps_opts = if _pext.is_null() || _num_ext == 0 { None } else { crate::pso_ext::ps::options_in_entries(unsafe { core::slice::from_raw_parts(_pext, _num_ext as usize * crate::pso_ext::EXT_STRIDE) }, _num_ext as usize) };
+    let root = rd(&desc, 0) as *mut c_void;
     let mut ps_origin: Option<crate::pso_ext::ps::PsOrigin> = None;
     let stages = [("VS", 0x08usize), ("PS", 0x18), ("DS", 0x28), ("HS", 0x38), ("GS", 0x48)];
     for &(stage, off) in stages.iter().filter(|&&(_, o)| rd(&desc, o) != 0 && rd(&desc, o + 8) != 0).skip(1) {
@@ -715,10 +716,19 @@ unsafe extern "system" fn create_gfx_pso_x(
             continue;
         }
         let rtfmt = stage_rtfmt(stage, &desc);
-        match unsafe { crate::shader_xlat::translate_for_targets(p, n, rtfmt) } {
+        let root_data = if matches!(stage, "VS" | "PS") {
+            unsafe { crate::shader_xlat::external_root_for_shader(p, n, root) }
+        } else {
+            None
+        };
+        let translated = match root_data.as_deref() {
+            Some(data) => crate::shader_xlat::translate_with_pipeline_root(unsafe { core::slice::from_raw_parts(p, n) }, data, rtfmt),
+            None => unsafe { crate::shader_xlat::translate_for_targets(p, n, rtfmt) },
+        };
+        match translated {
             Ok(code) => {
                 let code = if stage == "PS" {
-                    ps_origin = crate::pso_ext::ps::origin_from_blob(p, n, rtfmt, ps_opts.unwrap_or_default());
+                    ps_origin = crate::pso_ext::ps::origin_from_blob(p, n, rtfmt, ps_opts.unwrap_or_default(), root_data.map(std::sync::Arc::from));
                     match (ps_opts, &ps_origin) {
                         (Some(_), Some(o)) => crate::pso_ext::ps::variant(o, crate::pso_ext::ps::depth_stencil_writes(&desc)).unwrap_or(code),
                         _ => code,
@@ -1147,7 +1157,10 @@ unsafe extern "system" fn create_derived_pso_x(
         }
     }
     if let Some(o) = ps_origin.as_ref().filter(|o| o.options.iter().any(|&v| v != 0)) {
-        let code = crate::pso_ext::ps::variant(o, crate::pso_ext::ps::depth_stencil_writes(&desc)).or_else(|| unsafe { crate::shader_xlat::translate_for_targets(o.blob.as_ptr(), o.blob.len(), o.rtfmt) }.ok());
+        let code = crate::pso_ext::ps::variant(o, crate::pso_ext::ps::depth_stencil_writes(&desc)).or_else(|| match o.root.as_deref() {
+            Some(root) => crate::shader_xlat::translate_with_pipeline_root(&o.blob, root, o.rtfmt).ok(),
+            None => unsafe { crate::shader_xlat::translate_for_targets(o.blob.as_ptr(), o.blob.len(), o.rtfmt) }.ok(),
+        });
         if let Some(code) = code {
             desc[0x18..0x20].copy_from_slice(&(code.as_ptr() as u64).to_le_bytes());
             desc[0x20..0x28].copy_from_slice(&(code.len() as u64).to_le_bytes());
