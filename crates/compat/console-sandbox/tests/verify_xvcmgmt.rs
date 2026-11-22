@@ -167,8 +167,8 @@ fn client_flow_against_the_emulated_host() {
     assert_eq!(r.wait(300), None, "the emulated host never answers on its own");
     let id = *before.last().unwrap();
     assert_eq!(xvcmgmt::host_take_received(id), frame);
-    let log = std::fs::read_to_string(std::path::PathBuf::from(std::env::var("TOMBOX_LOG").unwrap())).unwrap_or_default();
-    assert!(log.contains("emulated host endpoint"), "the swallowed send is logged: {log}");
+    let log = [std::path::PathBuf::from(std::env::var("TOMBOX_LOG").unwrap()), std::env::temp_dir().join("tombox_compat.log")].iter().map(|p| std::fs::read_to_string(p).unwrap_or_default()).collect::<String>();
+    assert!(log.contains(&format!("queue {q} sent {} bytes to emulated host endpoint", frame.len())), "the swallowed send is logged");
     assert_eq!(sync_fail(xvcmgmt::IOCTL_SHUTDOWN, &q.to_le_bytes(), &mut []), STATUS_NOT_IMPLEMENTED);
     assert_eq!(Call::new().run(xvcmgmt::IOCTL_CLOSE, &q.to_le_bytes(), &mut []), 0);
     assert_eq!(r.wait(5000).map(|x| x.0), Some(xvcmgmt::STATUS_CANCELLED));

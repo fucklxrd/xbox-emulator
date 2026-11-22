@@ -193,7 +193,35 @@ pub fn is_device(h: usize) -> bool {
     }
 }
 
-pub fn forget(_h: usize) {}
+#[link(name = "ntdll")]
+extern "system" {
+    fn NtQueryObject(h: usize, class: u32, buf: *mut u8, len: u32, ret: *mut u32) -> i32;
+}
+
+fn handle_count(h: usize) -> u32 {
+    let mut b = [0u8; 56];
+    if unsafe { NtQueryObject(h, 0, b.as_mut_ptr(), 56, core::ptr::null_mut()) } < 0 {
+        return 0;
+    }
+    u32::from_le_bytes(b[8..12].try_into().unwrap())
+}
+
+pub fn before_close(h: usize) {
+    if h == 0 || h == usize::MAX {
+        return;
+    }
+    let Some(cmp) = compare_object_handles() else { return };
+    let mut f = fabric();
+    let Some(p) = f.handles.iter().copied().find(|&p| p != h && unsafe { cmp(h, p) } != 0) else { return };
+    if handle_count(p) <= 2 {
+        f.handles.remove(&p);
+        unsafe { CloseHandle(p) };
+    }
+}
+
+pub fn device_handles() -> usize {
+    fabric().handles.len()
+}
 
 fn deliver(f: &mut Fabric, from: u64, data: &[u8]) -> i32 {
     let Some(peer) = f.endpoints.get(&from).and_then(|e| e.connected.then_some(e.peer).flatten()) else { return STATUS_CONNECTION_INVALID };
@@ -543,6 +571,11 @@ extern "system" {
 #[link(name = "ntdll")]
 extern "system" {
     fn RtlNtStatusToDosError(st: i32) -> u32;
+}
+
+pub unsafe extern "system" fn close_handle(h: usize) -> i32 {
+    before_close(h);
+    CloseHandle(h)
 }
 
 pub unsafe extern "system" fn device_io_control(h: usize, code: u32, inb: *const u8, inl: u32, outb: *mut u8, outl: u32, ret: *mut u32, ov: *mut c_void) -> i32 {

@@ -99,6 +99,7 @@ pub unsafe extern "system" fn reg_delete_value_w(h: usize, name: *const u16) -> 
     if k.values.len() == before {
         return ERROR_FILE_NOT_FOUND;
     }
+    k.written = crate::registry::now();
     s.save();
     ERROR_SUCCESS
 }

@@ -7,8 +7,8 @@
 7 D3D12CreateRootSignatureDeserializer implemented | code thunk, not a PE forwarder: host d3d12.dll (console calls xgs12 UMDCreateRootSignatureDeserializer, same interface)
 8 D3D12CreateVersionedRootSignatureDeserializer implemented | code thunk, not a PE forwarder: host d3d12.dll (console calls xgs12 UMDCreateVersionedRootSignatureDeserializer)
 9 D3D12GetDebugInterface forwarded | host d3d12.dll; same ID3D12Debug IID
-10 D3D12SerializeRootSignature implemented | code thunk, not a PE forwarder: host d3d12.dll
-11 D3D12SerializeVersionedRootSignature implemented | code thunk, not a PE forwarder: host d3d12.dll
+10 D3D12SerializeRootSignature implemented | rs_xbox::serialize: clears the Xbox-only root flags (0x01000000 memory-based ABI / raytracing, 0x02000000 compute-2 spill area, 0x80000000 driver-discarded) from the desc before host d3d12.dll serializes it, then writes them back into the returned blob so a console deserializer sees the original flags
+11 D3D12SerializeVersionedRootSignature implemented | rs_xbox::serialize_versioned: same Xbox root-flag strip before host d3d12.dll and restore into the returned blob (flags read at the versioned desc offset, whatever the version)
 12 D3D12UploadCustomMicrocodeX implemented | src/kmd10.rs: console E_INVALIDARG on any zero arg, 0x38-byte packet to IOCTL 0x7900c223 (direct call or cached XgsKmd10 handle), any failure E_FAIL
 13 D3D12XboxCreateDevice implemented | console 0x14e0: NULL parameters -> E_INVALIDARG before anything else, then *ppDevice cleared; host D3D12 device wrapped in the Scarlett vtable layer; create_device_tests
 14 D3D12XboxEnableMemoryProfiling implemented | src/kmd10.rs: console opens XgsKmd10 with handshake (open HRESULT on failure), then IOCTL 0x7900c1cc with the three u64 args, HRESULT_FROM_WIN32 on failure

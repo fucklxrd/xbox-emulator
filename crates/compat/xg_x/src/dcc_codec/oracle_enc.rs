@@ -316,3 +316,75 @@ fn oracle_xgx_dcc_enc_stream_overflow_layout() {
     println!("xg_x dcc enc stream overflow: {n} cases where native predicts the packed stream overruns the 256-byte output surface; console driver 0x189b0 wrote past the surface in all {n} (up to {reach} bytes past the end), and its in-bounds output changed when the next heap block was the codec's own surface 2 in {varied} of them");
     assert!(n > 0);
 }
+
+fn walk_cases(or: &super::tests::Tm) -> Vec<(i32, i32, [u32; 2], [u8; 256], super::run::Scratch, usize)> {
+    let mut v = Vec::new();
+    let mut r = Rng(0x3a1c_0f5e);
+    for &(f, t, _) in &cases(or) {
+        for _ in 0..40 {
+            let p = params(&mut r);
+            let s0 = block(&mut r);
+            let sc = known(&mut r);
+            for fl in 0..FILLS {
+                let mut nd = fresh(fl, &sc);
+                if nd.setup(f, t, p[0], p[1]) != 0 {
+                    break;
+                }
+                nd.s[0] = s0;
+                if let Err(super::Stop::Fault(w)) = enc::run(&mut nd) {
+                    if w.contains("walks past sector 3") && v.len() < 24 {
+                        v.push((f, t, p, s0, super::run::Scratch { b: sc.b, unknown: sc.unknown }, fl));
+                    }
+                    break;
+                }
+            }
+        }
+    }
+    v
+}
+
+#[test]
+fn oracle_xgx_dcc_enc_plane_walk_reads_neighbours() {
+    if let Ok(spec) = std::env::var("XGX_DCC_ENC_WALK") {
+        let Some((_orc, ref or)) = console() else { std::process::exit(3) };
+        let (i, g) = spec.split_once(':').unwrap();
+        let guard = if g == "1" { 0xffu8 } else { 0x00 };
+        let (f, t, p, s0, sc, fl) = walk_cases(or).swap_remove(i.parse().unwrap());
+        let drv: St = unsafe { core::mem::transmute(or.rva(0x189b0)) };
+        let (c, _) = Con::new(or, f, t, p);
+        let mut d = fresh(fl, &sc);
+        d.setup(f, t, p[0], p[1]);
+        prefill(&c, &d);
+        c.set_surf(0, &s0);
+        unsafe { core::ptr::write_bytes((c.ptr() as *mut u8).add(0x420), guard, c.buf.len() * 8 - 0x420) };
+        let mut s1 = vec![0u8; 0x40000];
+        let mut s2 = vec![guard; 0x40000];
+        s2[..256].copy_from_slice(&c.get_surf(2));
+        unsafe {
+            (c.ptr() as *mut u8).add(0x98).cast::<*mut u8>().write_unaligned(s1.as_mut_ptr());
+            (c.ptr() as *mut u8).add(0xd8).cast::<*mut u8>().write_unaligned(s2.as_mut_ptr());
+        }
+        drv(c.ptr());
+        let mut h = 0x811c_9dc5u32;
+        for b in s1[..256].iter().chain(core::iter::once(&c.image()[0x34])) {
+            h = (h ^ *b as u32).wrapping_mul(0x0100_0193);
+        }
+        std::process::exit((h & 0xffff) as i32 + 0x10);
+    }
+    let Some((_orc, ref or)) = console() else { return };
+    let wc = walk_cases(or);
+    let (mut crashed, mut differ, mut same_out) = (0usize, 0usize, 0usize);
+    for i in 0..wc.len() {
+        let x = std::process::Command::new(std::env::current_exe().unwrap()).args(["dcc_codec::oracle_enc::oracle_xgx_dcc_enc_plane_walk_reads_neighbours", "--exact", "--test-threads=1"]).env("XGX_DCC_ENC_WALK", format!("{i}:0")).stdout(std::process::Stdio::null()).stderr(std::process::Stdio::null()).status().unwrap().code().unwrap_or(0) as u32;
+        let y = std::process::Command::new(std::env::current_exe().unwrap()).args(["dcc_codec::oracle_enc::oracle_xgx_dcc_enc_plane_walk_reads_neighbours", "--exact", "--test-threads=1"]).env("XGX_DCC_ENC_WALK", format!("{i}:1")).stdout(std::process::Stdio::null()).stderr(std::process::Stdio::null()).status().unwrap().code().unwrap_or(0) as u32;
+        if x >= 0xc000_0000 || y >= 0xc000_0000 {
+            crashed += 1;
+        } else if x != y {
+            differ += 1;
+        } else {
+            same_out += 1;
+        }
+        println!("walk case {i} fmt {} tile {} params {:x?}: guard 00 -> {x:#x}, guard ff -> {y:#x}", wc[i].0, wc[i].1, wc[i].2);
+    }
+    println!("xg_x dcc enc plane walk: {} cases; console driver 0x189b0 faulted in {crashed}, gave different output for different memory past its object and surface 2 in {differ}, same output in {same_out}", wc.len());
+}

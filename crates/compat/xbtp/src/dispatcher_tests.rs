@@ -30,6 +30,11 @@ unsafe fn json_text(m: *mut c_void) -> String {
     String::from_utf8_lossy(s).trim_end_matches('\0').to_string()
 }
 
+unsafe fn set_reply(m: *mut c_void, text: &str) {
+    let w = wide(text);
+    assert_eq!(crate::xbtp2_ext::reply_set_json_w(m, w.as_ptr()), S_OK);
+}
+
 unsafe fn set_json(m: *mut c_void, text: &str) {
     let m = m as *mut Message;
     let w = wide(text);
@@ -38,7 +43,7 @@ unsafe fn set_json(m: *mut c_void, text: &str) {
 
 unsafe extern "system" fn echo(_session: usize, received: usize, reply: usize) -> HRESULT {
     let t = json_text(received as *mut c_void);
-    set_json(reply as *mut c_void, &t.replace("ping", "pong"));
+    set_reply(reply as *mut c_void, &t.replace("ping", "pong"));
     S_OK
 }
 
@@ -63,7 +68,7 @@ unsafe extern "system" fn stream(session: usize, _received: usize, reply: usize)
     }
     let t = json_text(got);
     com_release(got);
-    set_json(reply as *mut c_void, &format!("{{\"client\":{t}}}"));
+    set_reply(reply as *mut c_void, &format!("{{\"client\":{t}}}"));
     S_OK
 }
 
@@ -347,4 +352,31 @@ fn server_session_vtable_matches_xtf_contract() {
     assert_eq!(core::mem::offset_of!(SessionImplVtbl, get_property), 0x50);
     assert_eq!(core::mem::offset_of!(DispatcherComVtbl, add_extension), 0x20);
     assert_eq!(core::mem::offset_of!(DispatcherComVtbl, set_session_key), 0x38);
+}
+
+#[test]
+fn reply_is_operation_end_message_with_console_slots() {
+    unsafe {
+        let inner = new_message();
+        let e = crate::xbtp2_ext::new_end_message(inner) as *mut c_void;
+        let slots = *(e as *const *const usize);
+        let set_w: unsafe extern "system" fn(*mut c_void, *const u16) -> HRESULT = core::mem::transmute(*slots.add(6));
+        let w = wide("{\"a\":1}");
+        assert_eq!(set_w(e, w.as_ptr()), S_OK);
+        assert_eq!(json_text(inner as *mut c_void), "{\"a\":1}");
+        let set_bin: unsafe extern "system" fn(*mut c_void, u32, *const u8) -> HRESULT = core::mem::transmute(*slots.add(7));
+        let data = [1u8, 2, 3];
+        assert_eq!(set_bin(e, 3, data.as_ptr()), S_OK);
+        let get_bin: unsafe extern "system" fn(*mut c_void, *mut u32, *mut *mut u8) -> HRESULT = core::mem::transmute(*slots.add(4));
+        let mut n = 0u32;
+        let mut p: *mut u8 = null_mut();
+        assert_eq!(get_bin(e, &mut n, &mut p), S_OK);
+        assert_eq!(core::slice::from_raw_parts(p, n as usize), &data);
+        let mut q: *mut c_void = null_mut();
+        assert_eq!(crate::xbtp2_ext::com_qi(e, &crate::xbtp2_ext::IID_XBTP_OPERATION_END_MESSAGE, &mut q), S_OK);
+        com_release(q);
+        assert_eq!(crate::xbtp2_ext::com_qi(e, &crate::xbtp2_ext::IID_XBTP_MESSAGE, &mut q), E_NOINTERFACE);
+        com_release(e);
+        com_release(inner as *mut c_void);
+    }
 }

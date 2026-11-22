@@ -346,3 +346,67 @@ fn unowned_licenses_are_returned_invalid_not_failed() {
         assert_eq!(status(xa, &mut *b, true), store::E_NOT_FOUND);
     }
 }
+
+#[test]
+fn owner_terminate_terminates_its_ports_for_composites() {
+    let _g = SERIAL.lock().unwrap_or_else(|e| e.into_inner());
+    unsafe {
+        let t = tq();
+        let mut q = 0usize;
+        assert_eq!((t.create)(t.o, 0, 0, &mut q), 0);
+        let (mut w, mut c) = (0usize, 0usize);
+        assert_eq!((t.port)(t.o, q, 0, &mut w), 0);
+        assert_eq!((t.port)(t.o, q, 1, &mut c), 0);
+        let mut comp = 0usize;
+        assert_eq!((t.composite)(t.o, w, c, &mut comp), 0);
+        assert_eq!((t.submit)(t.o, comp, 0, 0x9001 as *mut c_void, record), 0);
+        assert_eq!((t.terminate)(t.o, q, false, 0x9002 as *mut c_void, terminated), 0);
+        for _ in 0..8 {
+            (t.dispatch)(t.o, q, 0, 0);
+            (t.dispatch)(t.o, q, 1, 0);
+        }
+        assert_eq!(events(0x9001), ["canceled"]);
+        assert_eq!(events(0x9002), ["terminated"]);
+        assert_eq!((t.submit)(t.o, comp, 0, 0x9003 as *mut c_void, record), E_ABORT);
+        assert_eq!((t.submit)(t.o, comp, 1, 0x9003 as *mut c_void, record), E_ABORT);
+        assert_eq!((t.delayed)(t.o, comp, 0, 10, 0x9003 as *mut c_void, record), E_ABORT);
+        let mut comp2 = 0x55usize;
+        assert_eq!((t.composite)(t.o, w, c, &mut comp2), E_ABORT);
+        std::thread::sleep(Duration::from_millis(50));
+        assert!(events(0x9003).is_empty());
+        (t.close)(t.o, comp);
+        (t.close)(t.o, q);
+    }
+}
+
+static SELF_Q: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+static SELF_TERM: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+static SELF_O: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+
+unsafe extern "system" fn terminate_self(ctx: *mut c_void, canceled: bool) {
+    push(ctx as usize, if canceled { "self canceled" } else { "self start" });
+    let f: unsafe extern "system" fn(*mut c_void, usize, bool, *mut c_void, TermCb) -> i32 = core::mem::transmute(SELF_TERM.load(std::sync::atomic::Ordering::SeqCst));
+    let hr = f(SELF_O.load(std::sync::atomic::Ordering::SeqCst) as *mut c_void, SELF_Q.load(std::sync::atomic::Ordering::SeqCst), true, ctx, terminated);
+    push(ctx as usize, if hr == 0 { "self returned" } else { "self failed" });
+}
+
+#[test]
+fn thread_pool_callback_can_terminate_its_own_queue_and_wait() {
+    let _g = SERIAL.lock().unwrap_or_else(|e| e.into_inner());
+    unsafe {
+        let t = tq();
+        let mut q = 0usize;
+        assert_eq!((t.create)(t.o, 1, 1, &mut q), 0);
+        SELF_Q.store(q, std::sync::atomic::Ordering::SeqCst);
+        SELF_O.store(t.o as usize, std::sync::atomic::Ordering::SeqCst);
+        SELF_TERM.store(t.terminate as usize, std::sync::atomic::Ordering::SeqCst);
+        let tag = 0xa001usize;
+        assert_eq!((t.submit)(t.o, q, 0, tag as *mut c_void, terminate_self), 0);
+        let t0 = Instant::now();
+        while !events(tag).contains(&"self returned") && t0.elapsed() < Duration::from_secs(5) {
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        assert_eq!(events(tag), ["self start", "terminated", "self returned"]);
+        (t.close)(t.o, q);
+    }
+}

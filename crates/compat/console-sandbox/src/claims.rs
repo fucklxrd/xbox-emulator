@@ -70,10 +70,16 @@ pub fn launch_instance() -> [u8; 16] {
     static ID: OnceLock<[u8; 16]> = OnceLock::new();
     *ID.get_or_init(|| {
         if let Some(g) = std::env::var(LAUNCH_ENV).ok().and_then(|s| parse_guid(&s)) {
+            compat_common::record_raw("console-sandbox", "XBOX://LI", &format!("launch instance {} from {LAUNCH_ENV}", format_guid(&g)));
             return g;
         }
         let mut g = [0u8; 16];
-        unsafe { BCryptGenRandom(0, g.as_mut_ptr(), 16, 2) };
+        let st = unsafe { BCryptGenRandom(0, g.as_mut_ptr(), 16, 2) };
+        if st < 0 {
+            let t = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_nanos()).unwrap_or(0) ^ ((std::process::id() as u128) << 64);
+            g.copy_from_slice(&t.to_le_bytes());
+            compat_common::record_raw("console-sandbox", "XBOX://LI", &format!("BCryptGenRandom failed {st:#x}; launch instance derived from time and pid"));
+        }
         g[7] = (g[7] & 0x0f) | 0x40;
         g[8] = (g[8] & 0x3f) | 0x80;
         compat_common::record_raw("console-sandbox", "XBOX://LI", &format!("launch instance {} issued by the emulated host", format_guid(&g)));

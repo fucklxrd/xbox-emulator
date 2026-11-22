@@ -361,13 +361,16 @@ fn xvcmgmt_queue_follows_the_driver() {
     extern "system" {
         fn DuplicateHandle(sp: usize, sh: usize, tp: usize, th: *mut usize, access: u32, inherit: i32, opts: u32) -> i32;
     }
+    let opened = xvcmgmt::device_handles();
     assert_ne!(unsafe { DuplicateHandle(GetCurrentProcess(), h, GetCurrentProcess(), &mut dup, 0, 0, 2) }, 0);
     assert!(xvcmgmt::is_device(dup), "a duplicated device handle still reaches the device");
     assert_eq!(unsafe { nt_close(h) }, 0);
     assert!(!xvcmgmt::is_device(h), "a closed handle value is no longer the device");
+    assert_eq!(xvcmgmt::device_handles(), opened, "the file object lives while the duplicate is open");
     assert_eq!(Call::new().run(dup, xvcmgmt::IOCTL_CLOSE, &0u64.to_le_bytes(), &mut []), 0);
-    unsafe { CloseHandle(dup) };
+    assert_eq!(unsafe { xvcmgmt::close_handle(dup) }, 1);
     assert!(!xvcmgmt::is_device(dup));
+    assert_eq!(xvcmgmt::device_handles(), opened - 1, "the last close releases the private reference");
 }
 
 #[test]

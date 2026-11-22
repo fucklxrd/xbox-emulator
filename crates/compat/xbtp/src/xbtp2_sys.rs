@@ -243,6 +243,23 @@ pub unsafe fn channel_submit(r: *mut ChannelRequest) {
     }
 }
 
+pub unsafe fn channel_cancel_request<F: FnOnce()>(r: *mut ChannelRequest, issued: F) {
+    let mut g = CHANNELS.lock().unwrap_or_else(|e| e.into_inner());
+    let mut prev: *mut *mut ChannelRequest = &mut g.head;
+    while !(*prev).is_null() {
+        if *prev == r {
+            *prev = (*r).next;
+            (*r).next = null_mut();
+            (*r).status = STATUS_CANCELLED;
+            SetEvent((*r).event);
+            return;
+        }
+        prev = &mut (**prev).next;
+    }
+    issued();
+    drop(g);
+}
+
 static TLS_ONCE: OnceLock<HRESULT> = OnceLock::new();
 static INIT: OnceLock<HRESULT> = OnceLock::new();
 

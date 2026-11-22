@@ -587,3 +587,89 @@ mod tests {
         }
     }
 }
+
+pub const IID_XBTP_OPERATION_END_MESSAGE: GUID = GUID::new(0x1bde262a, 0xe941, 0x4313, [0x8a, 0x28, 0x93, 0x0a, 0xda, 0x23, 0x90, 0x85]);
+pub const IID_XBTP_OPERATION_END_MESSAGE_IMPL: GUID = GUID::new(0x14bca0bc, 0x2ed8, 0x4321, [0x89, 0xab, 0xc1, 0x2a, 0xa2, 0x8e, 0x1d, 0x45]);
+
+#[repr(C)]
+pub struct EndMessageVtbl {
+    pub query_interface: Qi,
+    pub add_ref: Ref,
+    pub release: Ref,
+    pub get_json_body: unsafe extern "system" fn(*mut EndMessage, *mut u32, *mut *mut u8) -> HRESULT,
+    pub get_binary_body: unsafe extern "system" fn(*mut EndMessage, *mut u32, *mut *mut u8) -> HRESULT,
+    pub set_json_body: unsafe extern "system" fn(*mut EndMessage, u32, *const u8) -> HRESULT,
+    pub set_json_body_w: unsafe extern "system" fn(*mut EndMessage, *const u16) -> HRESULT,
+    pub set_binary_body: unsafe extern "system" fn(*mut EndMessage, u32, *const u8) -> HRESULT,
+}
+
+#[repr(C)]
+pub struct EndMessage {
+    pub vtbl: *const EndMessageVtbl,
+    pub refs: AtomicU32,
+    pub message: *mut Message,
+}
+
+pub static END_MESSAGE_VTBL: EndMessageVtbl = EndMessageVtbl {
+    query_interface: em_qi,
+    add_ref: em_add_ref,
+    release: em_release,
+    get_json_body: em_get_json_body,
+    get_binary_body: em_get_binary_body,
+    set_json_body: em_set_json_body,
+    set_json_body_w: em_set_json_body_w,
+    set_binary_body: em_set_binary_body,
+};
+
+pub unsafe fn new_end_message(inner: *mut Message) -> *mut EndMessage {
+    com_add_ref(inner as *mut c_void);
+    Box::into_raw(Box::new(EndMessage { vtbl: &END_MESSAGE_VTBL, refs: AtomicU32::new(1), message: inner }))
+}
+
+unsafe extern "system" fn em_qi(this: *mut c_void, iid: *const GUID, out: *mut *mut c_void) -> HRESULT {
+    qi_match(this, iid, out, &[IID_XBTP_OPERATION_END_MESSAGE, IID_IUNKNOWN, IID_XBTP_OPERATION_END_MESSAGE_IMPL])
+}
+
+unsafe extern "system" fn em_add_ref(this: *mut c_void) -> u32 {
+    (*(this as *mut EndMessage)).refs.fetch_add(1, Ordering::AcqRel) + 1
+}
+
+unsafe extern "system" fn em_release(this: *mut c_void) -> u32 {
+    let e = this as *mut EndMessage;
+    let n = (*e).refs.fetch_sub(1, Ordering::AcqRel) - 1;
+    if n == 0 {
+        com_release((*e).message as *mut c_void);
+        drop(Box::from_raw(e));
+    }
+    n
+}
+
+unsafe extern "system" fn em_get_json_body(e: *mut EndMessage, n: *mut u32, b: *mut *mut u8) -> HRESULT {
+    let m = (*e).message;
+    ((*(*m).vtbl).get_json_body)(m, n, b)
+}
+
+unsafe extern "system" fn em_get_binary_body(e: *mut EndMessage, n: *mut u32, b: *mut *mut u8) -> HRESULT {
+    let m = (*e).message;
+    ((*(*m).vtbl).get_binary_body)(m, n, b)
+}
+
+unsafe extern "system" fn em_set_json_body(e: *mut EndMessage, n: u32, b: *const u8) -> HRESULT {
+    let m = (*e).message;
+    ((*(*m).vtbl).set_json_body_copy)(m, n, b)
+}
+
+unsafe extern "system" fn em_set_json_body_w(e: *mut EndMessage, w: *const u16) -> HRESULT {
+    let m = (*e).message;
+    ((*(*m).vtbl).set_json_body_w)(m, w)
+}
+
+unsafe extern "system" fn em_set_binary_body(e: *mut EndMessage, n: u32, b: *const u8) -> HRESULT {
+    let m = (*e).message;
+    ((*(*m).vtbl).set_binary_body_copy)(m, n, b)
+}
+
+pub unsafe fn reply_set_json_w(reply: *mut c_void, w: *const u16) -> HRESULT {
+    let e = reply as *mut EndMessage;
+    ((*(*e).vtbl).set_json_body_w)(e, w)
+}

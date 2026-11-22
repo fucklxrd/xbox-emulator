@@ -31,6 +31,7 @@ unsafe extern "system" fn nt_close(h: usize) -> i32 {
     if registry::close(h) {
         0
     } else {
+        xvcmgmt::before_close(h);
         NtClose(h)
     }
 }
@@ -125,6 +126,7 @@ pub fn hooks() -> Vec<Hook> {
         hook!("RegDeleteValueW", REG, regw::reg_delete_value_w),
         hook!("RegDeleteKeyW", REG, regw::reg_delete_key_w),
         hook!("CreateFileW", FILE, fs::create_file_w),
+        hook!("CloseHandle", &["api-ms-win-core-handle-", "kernelbase", "kernel32"], xvcmgmt::close_handle),
         hook!("DeviceIoControl", &["api-ms-win-core-io-", "kernelbase", "kernel32"], xvcmgmt::device_io_control),
         hook!("GetFileAttributesW", FILE, fs::get_file_attributes_w),
         hook!("DeleteFileW", FILE, fs::delete_file_w),

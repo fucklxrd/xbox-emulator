@@ -404,7 +404,9 @@ unsafe extern "C" fn tcp_channel_dtor(ch: *mut XbtpChannel, flags: u32) -> *mut 
     if s != INVALID_SOCKET {
         shutdown(s, 1);
         if (*ch).pending != 0 && (*ch).ov.internal == STATUS_PENDING {
-            CancelIoEx(s as HANDLE, &mut (*ch).ov);
+            crate::xbtp2_sys::channel_cancel_request(&mut (*ch).request, || {
+                CancelIoEx(s as HANDLE, &mut (*ch).ov);
+            });
         }
     }
     channel_wait_idle(ch);
@@ -419,6 +421,9 @@ unsafe extern "C" fn tcp_channel_dtor(ch: *mut XbtpChannel, flags: u32) -> *mut 
 }
 
 unsafe extern "C" fn np_channel_dtor(ch: *mut XbtpChannel, flags: u32) -> *mut XbtpChannel {
+    if (*ch).pending != 0 {
+        crate::xbtp2_sys::channel_cancel_request(&mut (*ch).request, || {});
+    }
     if (*ch).handle != 0 {
         CloseHandle((*ch).handle as HANDLE);
         (*ch).handle = 0;

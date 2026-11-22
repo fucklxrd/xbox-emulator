@@ -70,8 +70,14 @@ pub fn link_args(text: &str) -> Vec<String> {
 }
 
 pub fn emit_link_args(path: &str) {
-    println!("cargo:rerun-if-changed={path}");
-    let text = std::fs::read_to_string(path).expect("exports.txt");
+    let mut full = std::path::PathBuf::from(path);
+    if full.is_relative() {
+        if let Ok(dir) = std::env::var("CARGO_MANIFEST_DIR") {
+            full = std::path::Path::new(&dir).join(path);
+        }
+    }
+    println!("cargo:rerun-if-changed={}", full.display());
+    let text = std::fs::read_to_string(&full).unwrap_or_else(|e| panic!("exports.txt at {}: {e}", full.display()));
     let msvc = std::env::var("CARGO_CFG_TARGET_ENV").map(|e| e == "msvc").unwrap_or(false);
     if !msvc {
         return;

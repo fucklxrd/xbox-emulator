@@ -197,6 +197,7 @@ pub unsafe extern "system" fn nt_delete_key(h: usize) -> i32 {
     if let Some((parent, leaf)) = k.rsplit_once('\\') {
         if let Some(p) = s.keys.get_mut(parent) {
             p.subkeys.remove(leaf);
+            p.written = crate::registry::now();
         }
     }
     s.save();
@@ -213,6 +214,7 @@ pub unsafe extern "system" fn nt_delete_value_key(h: usize, name: *const u8) -> 
     if key.values.len() == before {
         return STATUS_OBJECT_NAME_NOT_FOUND;
     }
+    key.written = crate::registry::now();
     s.save();
     STATUS_SUCCESS
 }

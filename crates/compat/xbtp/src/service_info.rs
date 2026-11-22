@@ -331,8 +331,7 @@ unsafe fn write_reply(body: &Json, reply: *mut c_void) -> HRESULT {
         Ok(t) => t,
         Err(hr) => return hr,
     };
-    let m = reply as *mut Message;
-    ((*(*m).vtbl).set_json_body_w)(m, text.0)
+    crate::xbtp2_ext::reply_set_json_w(reply, text.0)
 }
 
 pub enum ServiceOp {

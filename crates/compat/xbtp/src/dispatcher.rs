@@ -747,7 +747,8 @@ where
         com_release(received);
         return STATUS_PROTOCOL;
     }
-    let reply = new_message() as *mut c_void;
+    let inner = new_message();
+    let reply = crate::xbtp2_ext::new_end_message(inner) as *mut c_void;
     let server = new_server_session(session, msg.exchange_id);
     {
         let g = guid_args(&msg.session_id);
@@ -772,8 +773,9 @@ where
         STATUS_OK
     };
     com_release(received);
-    let r = send_reply(session, msg.exchange_id, status, reply);
     com_release(reply);
+    let r = send_reply(session, msg.exchange_id, status, inner as *mut c_void);
+    com_release(inner as *mut c_void);
     r
 }
 

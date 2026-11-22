@@ -1154,7 +1154,9 @@
   "console_verified_20261121": "Independent verifier 2026-11-21 PASS vs console DLLs (19041/22000/22621): KernelBase Add/RemovePackageToFamilyXref, advapi32(+legacy) LsaEnable/DisablePasswordLessCurrentUser, hix_xs CollectHangSummary/WriteHangDump/DebugLive (dump lacks GPU state, BLOCKERS), KernelTraceControl CreateMergedTraceFile, netprofmsvc_c DllMain, wldp WldpSendSmartAppControlBlockToast, xg_xs XGDecodeDCC, xbtp 16 exports, GCXAudioExt CreateXmaBufferEngine (CPU XMA decode), minappmodelx 1-4. FAIL: xbtp AddPipeEndpoint duplicate path, xmem XMemGetWorkingSetStatistics v2/legacy field copy.",
   "xgencodedcc_verified": "2026-11-21 verifier PASS: 1000 fuzz cases vs console xg_xs.dll (577 identical, all rejections proven unstable on console), 7 oracle_enc tests 0 mismatches; deviation: stops at first undefined block with E_INVALIDARG.",
   "console_defects_reverify_20261121": "Second verifier 2026-11-21: PASS XAppCapture slot4, XTaskQueue submit/E_ABORT/drain, XPackage rows except FindChunkAvailability, XSystemGetAnalyticsInfo, XUser codes (console decides), XStore codes 0x89245300-04 + fulfillment + purchase mapping, xmem v2/legacy, GlobalMemoryStatusEx, xfrontpaneldisplay, d3d12_x device/serialize, advapi32legacy Elf*. FAIL/held: FindChunkAvailability swallows INVALID_SELECTOR, XTaskQueueTerminate callback thread + inline canceled callbacks, XStore license slots 20/71/62 unproven, minuserx index validation, d3d12_xs Fortnite 19041 build differs (mask 0x81f00001, 0x40 params), d3d12_x deserializer returns stripped flags.",
-  "console_round2_verified": "2026-11-21 verifier round 2 PASS: FindChunkAvailability, XStore slots 20/71 (slot 62 E_NOT_FOUND acceptable, store-service dependent, unprovable offline), minuserx WindowLongPtr index checks, d3d12_xs per OS build (19041 vs 22000+, all 4 dumps), d3d12_x deserializer flags + NULL ppDevice, 105 forwarded labels. Held: XTaskQueueTerminate (composite ports not terminated; self-terminate wait=true deadlock)."
+  "console_round2_verified": "2026-11-21 verifier round 2 PASS: FindChunkAvailability, XStore slots 20/71 (slot 62 E_NOT_FOUND acceptable, store-service dependent, unprovable offline), minuserx WindowLongPtr index checks, d3d12_xs per OS build (19041 vs 22000+, all 4 dumps), d3d12_x deserializer flags + NULL ppDevice, 105 forwarded labels. Held: XTaskQueueTerminate (composite ports not terminated; self-terminate wait=true deadlock).",
+  "gamecoreclient_verified": "2026-11-21 verifier PASS: gamecoreclient DllGetClassObject F5715449/7FA7A8FD construct on all 4 dumps via sandboxed console DLL, XBOX://LI claim, emulated xvcmgmt (8 IOCTLs match XDefiant xvcmgmt.sys). Gap: host side of the {c12a416b,LI} protocol is not implemented (sends logged, no replies) - BLOCKERS.",
+  "xtaskqueue_terminate_verified": "2026-11-21 verifier round 3 PASS: XTaskQueueTerminate/CreateComposite; E_ABORT matches console helper 0x6d7f8 (submit 0x6be20/0x6c410, attach 0x6d020); process queue E_ACCESSDENIED (0x6d0d8). Known blocking cases match the console/libHttpClient model."
  },
  "hooked": {
   "file": "crates/compat/compat-common/src/net_guard.rs",
@@ -3108,12 +3110,6 @@
  },
  "console_pending": {
   "XVMAudioService.dll": [
-   "DllGetClassObject"
-  ],
-  "GDK XAsync/XTaskQueue/XThread (QueryApiImpl)": [
-   "XTaskQueueTerminate"
-  ],
-  "gamecoreclient.dll": [
    "DllGetClassObject"
   ]
  }

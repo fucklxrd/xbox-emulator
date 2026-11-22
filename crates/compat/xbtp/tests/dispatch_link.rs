@@ -26,6 +26,11 @@ unsafe fn json_text(m: *mut c_void) -> String {
     String::from_utf8_lossy(core::slice::from_raw_parts(p, n as usize)).trim_end_matches('\0').to_string()
 }
 
+unsafe fn set_reply(m: *mut c_void, text: &str) {
+    let w = wide(text);
+    assert_eq!(xbtp::xbtp2_ext::reply_set_json_w(m, w.as_ptr()), S_OK);
+}
+
 unsafe fn set_json(m: *mut c_void, text: &str) {
     let m = m as *mut Message;
     let w = wide(text);
@@ -34,7 +39,7 @@ unsafe fn set_json(m: *mut c_void, text: &str) {
 
 unsafe extern "system" fn echo(_s: usize, received: usize, reply: usize) -> HRESULT {
     let t = json_text(received as *mut c_void);
-    set_json(reply as *mut c_void, &t.replace("ping", "pong"));
+    set_reply(reply as *mut c_void, &t.replace("ping", "pong"));
     S_OK
 }
 

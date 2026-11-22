@@ -1,7 +1,7 @@
 use super::xasync::{ProviderData, XASYNC};
 use super::{log, setting, Iface, This, E_ABORT, E_INVALIDARG, E_NOT_SUFFICIENT_BUFFER, E_PENDING, S_OK};
 use core::ffi::c_void;
-use std::cell::Cell;
+use std::cell::{Cell, RefCell};
 use std::collections::{HashMap, VecDeque};
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, Condvar, Mutex, OnceLock};
@@ -326,7 +326,7 @@ enum Queued {
 unsafe fn queued(h: usize, port: u32, job: Job) -> Queued {
     let Some(q) = queue(h) else { return Queued::Invalid(job) };
     let p = if port == 0 { q.work.clone() } else { q.completion.clone() };
-    if !q.live.try_enter() {
+    if p.terminated.load(Ordering::Acquire) || !q.live.try_enter() {
         return Queued::Aborted(job);
     }
     let ended = q.ended.clone();
@@ -335,10 +335,33 @@ unsafe fn queued(h: usize, port: u32, job: Job) -> Queued {
         p,
         resolve(h),
         Box::new(move |canceled| {
+            let key = Arc::as_ptr(&live) as usize;
+            FRAMES.with(|f| f.borrow_mut().push((key, false)));
             job(canceled || ended.load(Ordering::Acquire));
-            live.leave();
+            let released = FRAMES.with(|f| f.borrow_mut().pop().map(|x| x.1).unwrap_or(false));
+            if !released {
+                live.leave();
+            }
         }),
     )
+}
+
+thread_local! {
+    static FRAMES: RefCell<Vec<(usize, bool)>> = const { RefCell::new(Vec::new()) };
+}
+
+fn release_own_frames(live: &Arc<Live>) -> usize {
+    let key = Arc::as_ptr(live) as usize;
+    FRAMES.with(|f| {
+        let mut n = 0;
+        for fr in f.borrow_mut().iter_mut() {
+            if fr.0 == key && !fr.1 {
+                fr.1 = true;
+                n += 1;
+            }
+        }
+        n
+    })
 }
 
 pub unsafe fn submit(queue_h: usize, port: u32, job: Job) -> i32 {
@@ -411,17 +434,17 @@ pub unsafe fn submit_delayed(queue_h: usize, port: u32, delay_ms: u32, job: Job)
     S_OK
 }
 
-fn flush_timers(tag: usize) {
-    let mut due: Vec<(Arc<Port>, Job)> = Vec::new();
+fn flush_timers(tag: usize, ports: &[&Arc<Port>]) {
+    let mut due: Vec<(Arc<Port>, usize, Job)> = Vec::new();
     {
         let (m, cv) = timers();
         let mut v = m.lock().unwrap_or_else(|e| e.into_inner());
         let mut i = 0;
         while i < v.len() {
-            if v[i].1 == tag {
-                let (_, _, p, j) = v.swap_remove(i);
+            if v[i].1 == tag || ports.iter().any(|p| Arc::ptr_eq(p, &v[i].2)) {
+                let (_, tg, p, j) = v.swap_remove(i);
                 if let Some(j) = j {
-                    due.push((p, j));
+                    due.push((p, tg, j));
                 }
             } else {
                 i += 1;
@@ -429,8 +452,8 @@ fn flush_timers(tag: usize) {
         }
         cv.notify_all();
     }
-    for (p, j) in due {
-        p.submit_tagged(tag, j);
+    for (p, tg, j) in due {
+        p.submit_tagged(tg, j);
     }
 }
 
@@ -470,6 +493,9 @@ unsafe extern "system" fn q_create_composite(_t: This, work: usize, completion: 
     let m = port_handles().lock().unwrap_or_else(|e| e.into_inner());
     let (Some(w), Some(c)) = (m.get(&work).cloned(), m.get(&completion).cloned()) else { return E_INVALIDARG };
     drop(m);
+    if w.terminated.load(Ordering::Acquire) || c.terminated.load(Ordering::Acquire) {
+        return E_ABORT;
+    }
     *out = new_queue(w, c, false, false);
     S_OK
 }
@@ -534,8 +560,20 @@ unsafe extern "system" fn q_terminate(_t: This, q: usize, wait: bool, ctx: *mut 
         let forward: Job = Box::new(move |_| completion.submit_marker(deliver));
         work.submit_marker(forward);
     });
+    let own = release_own_frames(&qq.live);
     qq.live.end(&qq.ended, route);
-    flush_timers(resolve(q));
+    for _ in 0..own {
+        qq.live.leave();
+    }
+    if qq.owns {
+        flush_timers(resolve(q), &[&qq.work, &qq.completion]);
+        qq.work.terminated.store(true, Ordering::Release);
+        qq.completion.terminated.store(true, Ordering::Release);
+        qq.work.cv.notify_all();
+        qq.completion.cv.notify_all();
+    } else {
+        flush_timers(resolve(q), &[]);
+    }
     if wait {
         let mut d = sig.done.lock().unwrap_or_else(|e| e.into_inner());
         while !*d {

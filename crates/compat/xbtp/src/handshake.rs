@@ -168,6 +168,14 @@ pub unsafe fn serialize_json_message(body: &Json, message: *mut c_void) -> HRESU
     ((*(*m).vtbl).set_json_body_w)(m, text.0)
 }
 
+pub unsafe fn serialize_json_reply(body: &Json, reply: *mut c_void) -> HRESULT {
+    let text = match body.stringify() {
+        Ok(t) => t,
+        Err(hr) => return hr,
+    };
+    crate::xbtp2_ext::reply_set_json_w(reply, text.0)
+}
+
 pub unsafe fn server_handshake(expected_key: Option<&[u16]>, received: *mut c_void, reply: *mut c_void) -> HRESULT {
     let req = match deserialize_json_message(received) {
         Ok(j) => j,
@@ -205,7 +213,7 @@ pub unsafe fn server_handshake(expected_key: Option<&[u16]>, received: *mut c_vo
     if hr < 0 {
         return hr;
     }
-    serialize_json_message(&body, reply)
+    serialize_json_reply(&body, reply)
 }
 
 pub unsafe fn title_status(reply: *mut c_void) -> HRESULT {
@@ -218,7 +226,7 @@ pub unsafe fn title_status(reply: *mut c_void) -> HRESULT {
     if hr < 0 {
         return hr;
     }
-    serialize_json_message(&body, reply)
+    serialize_json_reply(&body, reply)
 }
 
 pub struct HandshakeOptions {
