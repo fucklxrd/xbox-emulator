@@ -4,9 +4,29 @@ use crate::console::{self, CONSOLE};
 use crate::getters::*;
 use crate::result::Handle;
 use core::ffi::CStr;
+use std::path::PathBuf;
+use std::sync::OnceLock;
 
-const EMPTY_CS: &[u8] = include_bytes!("../tests/fixtures/empty.dxil");
-const ADD_CS: &[u8] = include_bytes!("../tests/fixtures/add_od.dxil");
+// Only tests that exercise the staged console compiler need the DXIL fixtures.
+fn fixture(name: &str) -> Vec<u8> {
+    let dir = std::env::var_os("TOMBOX_XBSC_FIXTURES")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures"));
+    let path = dir.join(name);
+    std::fs::read(&path).unwrap_or_else(|err| {
+        panic!("read {}: {err}. Set TOMBOX_XBSC_FIXTURES to the directory with the local XBSC test shaders", path.display())
+    })
+}
+
+fn empty_cs() -> &'static [u8] {
+    static DXIL: OnceLock<Vec<u8>> = OnceLock::new();
+    DXIL.get_or_init(|| fixture("empty.dxil"))
+}
+
+fn add_cs() -> &'static [u8] {
+    static DXIL: OnceLock<Vec<u8>> = OnceLock::new();
+    DXIL.get_or_init(|| fixture("add_od.dxil"))
+}
 
 fn up() -> bool {
     CONSOLE.module(console::own()) != 0
@@ -53,7 +73,7 @@ fn compute(dxil: &'static [u8]) -> Pipeline {
 }
 
 unsafe fn compiled() -> (Pipeline, usize) {
-    let p = compute(EMPTY_CS);
+    let p = compute(empty_cs());
     let h = c!(XBSC_PipelineCompile, p.input.as_ptr(), 0);
     (p, h)
 }
@@ -70,12 +90,12 @@ fn XBSC_PipelineCompile_compiles_a_compute_shader_through_newbe() {
         assert_eq!((*(h as *const Handle)).tag, TAG_PIPELINE_OUTPUT);
         assert!(!XBSC_GetPipelineCompileOutput(h as *const u8).is_null());
         destroy(h);
-        let p = compute(ADD_CS);
+        let p = compute(add_cs());
         let h = c!(XBSC_PipelineCompile, p.input.as_ptr(), 0);
         assert_eq!(code(h), 1);
         assert!(message(h).starts_with("Failed to find resource in root sig: \"<Unnamed>\" UAV:RawBuffer(u0, space=0)"), "{}", message(h));
         destroy(h);
-        let mut v5 = compute(EMPTY_CS);
+        let mut v5 = compute(empty_cs());
         v5.input[0] = 5;
         let h = c!(XBSC_PipelineCompile, v5.input.as_ptr(), 0);
         assert_eq!(code(h), 1);
@@ -443,7 +463,8 @@ fn XBSC_DisassembleRawShader_needs_options() {
     if !up() {
         return;
     }
-    unsafe { assert_eq!(c!(XBSC_DisassembleRawShader, EMPTY_CS.as_ptr(), EMPTY_CS.len(), 0, 0), 0) }
+    let dxil = empty_cs();
+    unsafe { assert_eq!(c!(XBSC_DisassembleRawShader, dxil.as_ptr(), dxil.len(), 0, 0), 0) }
 }
 
 #[test]

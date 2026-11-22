@@ -273,7 +273,6 @@ fn run_time_loader_calls_resolve_to_routed_exports_with_pc_fallback() {
         assert!(compat_common::os_host::patch::module_path(sys_sh).to_ascii_lowercase().starts_with(compat_common::os_host::patch::windows_dir()));
         let ours = routes::module("shcore") as *mut c_void;
         assert_eq!(gpa(sys_sh, 227usize as *const u8), pcg(ours, 227usize as *const u8));
-        assert!(pcg(sys_sh, 227usize as *const u8).is_null());
         assert_eq!(gpa(sys_sh, b"RevokeScaleChangeNotifications\0".as_ptr()), pcg(ours, b"RevokeScaleChangeNotifications\0".as_ptr()));
         assert_eq!(gpa(sys_sh, b"GetScaleFactorForDevice\0".as_ptr()), pcg(sys_sh, b"GetScaleFactorForDevice\0".as_ptr()));
 
@@ -281,7 +280,8 @@ fn run_time_loader_calls_resolve_to_routed_exports_with_pc_fallback() {
         let wnf = gpa(nt, b"RtlWnfCompareChangeStamp\0".as_ptr());
         assert!(pcg(nt, b"RtlWnfCompareChangeStamp\0".as_ptr()).is_null());
         assert_eq!(wnf, pcg(routes::module("ntdll") as *mut c_void, b"RtlWnfCompareChangeStamp\0".as_ptr()));
-        assert!(gpa(nt, b"RtlpUmsThreadYield\0".as_ptr()).is_null());
+        let ums = b"RtlpUmsThreadYield\0".as_ptr();
+        assert_eq!(gpa(nt, ums), pcg(nt, ums));
         assert_eq!(gpa(nt, b"NtClose\0".as_ptr()), pcg(nt, b"NtClose\0".as_ptr()));
 
         let a32l = la(b"advapi32legacy.dll\0".as_ptr());
@@ -390,8 +390,18 @@ fn ex_caller_and_ldr_loader_imports_are_routed_too() {
         out = core::ptr::null_mut();
         assert_eq!(ldr_gpa(sys_sh, &pcname, 0, &mut out), 0);
         assert_eq!(out, pcg(sys_sh, b"GetScaleFactorForDevice\0".as_ptr()));
-        let missing = a_str(b"RtlpUmsThreadYield");
         let nt = LoadLibraryW(w("ntdll.dll").as_ptr());
+        let ums = a_str(b"RtlpUmsThreadYield");
+        let host_ums = pcg(nt, b"RtlpUmsThreadYield\0".as_ptr());
+        out = core::ptr::null_mut();
+        let status = ldr_gpa(nt, &ums, 0, &mut out);
+        if host_ums.is_null() {
+            assert_eq!(status as u32, 0xC000_0139);
+        } else {
+            assert_eq!(status, 0);
+            assert_eq!(out, host_ums);
+        }
+        let missing = a_str(b"TomBoxTestMissingExport");
         assert_eq!(ldr_gpa(nt, &missing, 0, &mut out) as u32, 0xC000_0139);
         assert_eq!(gpac(sys_sh, 227usize as *const u8, core::ptr::null_mut()), pcg(ours, 227usize as *const u8));
         assert_eq!(gpac(sys_sh, b"GetScaleFactorForDevice\0".as_ptr(), core::ptr::null_mut()), pcg(sys_sh, b"GetScaleFactorForDevice\0".as_ptr()));

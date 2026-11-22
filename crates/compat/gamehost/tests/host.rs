@@ -314,10 +314,30 @@ fn mount_with_trailing_bytes_fails_fast() {
 }
 
 #[test]
-fn launch_messages_decode_but_host_launch_is_not_implemented() {
+fn launch_message_publishes_plan_before_terminating_title() {
     let (mut h, _) = host(22621, true);
-    let m = LaunchNewGame { exe: w("game.exe"), args: w("-x") }.encode();
-    assert_eq!(h.dispatch(1, &m), Err(Fault::NotImplemented(MSG_LAUNCH_NEW_GAME)));
-    let m = LaunchRestartOnCrash { args: w("-r"), value: 1 }.encode();
-    assert_eq!(h.dispatch(1, &m), Err(Fault::NotImplemented(MSG_LAUNCH_RESTART_ON_CRASH)));
+    h.set_title(&w("current.exe"), &[]);
+    let request = LaunchNewGame { exe: w("game.exe"), args: w("-x") };
+    let plan = Launch { exe: request.exe.clone(), args: request.args.clone(), mode: LAUNCH_MODE_NEW_GAME };
+
+    assert_eq!(h.dispatch(1, &request.encode()), Ok(None));
+    assert_eq!(h.actions, [Action::ExitPlan(Some(plan.clone())), Action::TerminateTitle]);
+    assert_eq!(h.title_exited(), Some(plan));
+    assert_eq!(h.exit_plan(), None);
+}
+
+#[test]
+fn restart_message_queues_a_plan_for_crash_exit() {
+    let (mut h, _) = host(22621, true);
+    h.set_title(&w("game.exe"), &[]);
+    let request = LaunchRestartOnCrash { args: w("-r"), value: 1 };
+    let plan = Launch { exe: w("game.exe"), args: request.args.clone(), mode: LAUNCH_MODE_RESTART };
+
+    assert_eq!(h.dispatch(1, &request.encode()), Ok(None));
+    assert!(h.actions.is_empty());
+    assert_eq!(h.exit_plan(), None);
+    h.crash_dump_info(1);
+    assert_eq!(h.exit_plan(), Some(plan.clone()));
+    assert_eq!(h.title_exited(), Some(plan));
+    assert_eq!(h.exit_plan(), None);
 }
