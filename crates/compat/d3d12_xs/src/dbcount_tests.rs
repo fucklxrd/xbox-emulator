@@ -518,12 +518,16 @@ fn translated_pixel_shaders_with_uavs_keep_their_source() {
     let uav = tombox_xshader::dxc::compile("RWByteAddressBuffer u : register(u1); float4 main(float4 p : SV_Position) : SV_Target { u.Store(0, 1); return 1; }", "ps_6_0").expect("dxc");
     let plain = tombox_xshader::dxc::compile("float4 main() : SV_Target { return 1; }", "ps_6_0").expect("dxc");
     note_translated(&plain, b"blob", 1, &[0; 8]);
-    note_translated(&uav, b"blob", 2, &[0; 8]);
+    note_translated_with_root(&uav, b"blob", 2, &[0; 8], Some(b"root"));
     let m = PS_SRC.lock().unwrap();
     let m = m.as_ref().unwrap();
     assert!(!m.contains_key(&(plain.as_ptr() as usize)));
     let e = m.get(&(uav.as_ptr() as usize)).unwrap();
     assert_eq!((e.0, e.1), (uav.len(), fnv1a(&uav)));
+    let PsSrc::Xbox(blob, hash, formats, root) = &e.2 else { panic!("expected Xbox shader source") };
+    assert_eq!(blob.as_slice(), b"blob");
+    assert_eq!((*hash, *formats), (2, [0; 8]));
+    assert_eq!(root.as_deref(), Some(&b"root"[..]));
 }
 
 #[test]

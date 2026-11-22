@@ -14,7 +14,8 @@ use std::sync::{Arc, Mutex, OnceLock};
 
 type Cached = Result<Arc<Vec<u8>>, Arc<String>>;
 static CACHE: OnceLock<Mutex<HashMap<u64, Arc<OnceLock<Cached>>>>> = OnceLock::new();
-static MESH_ROOT_CACHE: OnceLock<Mutex<HashMap<u64, HashMap<Vec<u8>, Arc<OnceLock<Cached>>>>>> = OnceLock::new();
+type RootCacheKey = (u64, [u8; 8]);
+static PIPELINE_ROOT_CACHE: OnceLock<Mutex<HashMap<RootCacheKey, HashMap<Vec<u8>, Arc<OnceLock<Cached>>>>>> = OnceLock::new();
 static OK: AtomicUsize = AtomicUsize::new(0);
 static FAIL: AtomicUsize = AtomicUsize::new(0);
 static DUMPED: AtomicUsize = AtomicUsize::new(0);
@@ -164,7 +165,11 @@ fn translate_uncached(blob: &[u8], hash: u64, rtfmt: &[u8; 8]) -> Result<Vec<u8>
 }
 
 pub(crate) fn translate_edited(blob: &[u8], hash: u64, rtfmt: &[u8; 8], edit: &dyn Fn(&str) -> Result<String, String>) -> Result<Vec<u8>, String> {
-    std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| translate_uncached_with(blob, hash, rtfmt, Some(edit), None))).unwrap_or_else(|_| Err("translator panicked".to_string()))
+    translate_edited_with_root(blob, hash, rtfmt, edit, None)
+}
+
+pub(crate) fn translate_edited_with_root(blob: &[u8], hash: u64, rtfmt: &[u8; 8], edit: &dyn Fn(&str) -> Result<String, String>, root: Option<&[u8]>) -> Result<Vec<u8>, String> {
+    std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| translate_uncached_with(blob, hash, rtfmt, Some(edit), root))).unwrap_or_else(|_| Err("translator panicked".to_string()))
 }
 
 fn translate_uncached_with(blob: &[u8], hash: u64, rtfmt: &[u8; 8], edit: Option<&dyn Fn(&str) -> Result<String, String>>, root: Option<&[u8]>) -> Result<Vec<u8>, String> {
@@ -429,10 +434,10 @@ fn cell(key: u64) -> Arc<OnceLock<Cached>> {
     cache.lock().unwrap().entry(key).or_insert_with(|| Arc::new(OnceLock::new())).clone()
 }
 
-fn mesh_root_cell(hash: u64, root: &[u8]) -> Arc<OnceLock<Cached>> {
-    let cache = MESH_ROOT_CACHE.get_or_init(|| Mutex::new(HashMap::new()));
+fn pipeline_root_cell(key: RootCacheKey, root: &[u8]) -> Arc<OnceLock<Cached>> {
+    let cache = PIPELINE_ROOT_CACHE.get_or_init(|| Mutex::new(HashMap::new()));
     let mut cache = cache.lock().unwrap();
-    let roots = cache.entry(hash).or_default();
+    let roots = cache.entry(key).or_default();
     if let Some(entry) = roots.get(root) {
         return entry.clone();
     }
@@ -626,13 +631,16 @@ pub fn needs_external_root_data(blob: &[u8]) -> bool {
         && tombox_xshader::Dxbc::parse(blob).is_ok_and(|dxbc| dxbc.chunk(b"RTS0").is_none())
 }
 
-pub fn translate_mesh_with_root(blob: &[u8], root: &[u8]) -> Cached {
+pub fn translate_with_pipeline_root(blob: &[u8], root: &[u8], rtfmt: [u8; 8]) -> Cached {
     let hash = fnv1a(blob);
-    let entry = mesh_root_cell(hash, root);
+    let entry = pipeline_root_cell((hash, rtfmt), root);
     entry.get_or_init(|| {
         crate::perf::timed(crate::perf::SHADER, || {
-            let result = std::panic::catch_unwind(|| translate_uncached_with(blob, hash, &[0; 8], None, Some(root)))
+            let result = std::panic::catch_unwind(|| translate_uncached_with(blob, hash, &rtfmt, None, Some(root)))
                 .unwrap_or_else(|_| Err("translator panicked".to_string()));
+            if let Ok(code) = &result {
+                crate::dbcount::note_translated_with_root(code, blob, hash, &rtfmt, Some(root));
+            }
             finish_with(result, hash, blob.len(), None)
         })
     }).clone()
@@ -647,7 +655,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn mesh_pipeline_root_cache_separates_layouts_and_keeps_embedded_roots() {
+    fn pipeline_root_cache_separates_layouts_and_target_formats() {
         let body = [0; 24];
         let embedded = crate::device_wrap::wrap_root_signature(&body);
         assert!(!needs_external_root_data(&embedded));
@@ -657,10 +665,11 @@ mod tests {
         assert!(needs_external_root_data(&stripped));
         assert!(!needs_external_root_data(&stripped[..31]));
         let hash = fnv1a(&stripped);
-        let root_a = mesh_root_cell(hash, &[1, 2, 3]);
-        let root_b = mesh_root_cell(hash, &[1, 2, 4]);
-        assert!(Arc::ptr_eq(&root_a, &mesh_root_cell(hash, &[1, 2, 3])));
+        let root_a = pipeline_root_cell((hash, [0; 8]), &[1, 2, 3]);
+        let root_b = pipeline_root_cell((hash, [0; 8]), &[1, 2, 4]);
+        assert!(Arc::ptr_eq(&root_a, &pipeline_root_cell((hash, [0; 8]), &[1, 2, 3])));
         assert!(!Arc::ptr_eq(&root_a, &root_b));
+        assert!(!Arc::ptr_eq(&root_a, &pipeline_root_cell((hash, [1; 8]), &[1, 2, 3])));
         assert!(!Arc::ptr_eq(&root_a, &cell(cache_key(hash, &[0; 8]))));
     }
 

@@ -161,13 +161,15 @@ pub unsafe fn create_pipeline_state(real: *mut c_void, desc: *const [u64; 2], ri
         }
     };
     let xlat = |ty: u32, b: &[u8], (n, f): (u32, [u32; 8])| {
-        if ty == SUB_MS && root != 0 && crate::shader_xlat::needs_external_root_data(b) {
-            if let Some(data) = crate::console_slots_mesh::root_data(root as *mut c_void) {
-                return crate::shader_xlat::translate_mesh_with_root(b, &data).map_err(|e| e.to_string());
-            }
-        }
         let k = stage_rtfmt(ty, (n, f));
         let k = if ty == SUB_PS { crate::centroid_bind::tag_rtfmt(root, k) } else { k };
+        if matches!(ty, SUB_VS | SUB_PS | SUB_CS | SUB_MS)
+            && root != 0 && crate::shader_xlat::needs_external_root_data(b)
+        {
+            if let Some(data) = crate::console_slots_mesh::root_data(root as *mut c_void) {
+                return crate::shader_xlat::translate_with_pipeline_root(b, &data, k).map_err(|e| e.to_string());
+            }
+        }
         crate::shader_xlat::translate_for_targets(b.as_ptr(), b.len(), k).map_err(|e| e.to_string())
     };
     let (out, keep) = match translate_stream(stream, &xlat) {

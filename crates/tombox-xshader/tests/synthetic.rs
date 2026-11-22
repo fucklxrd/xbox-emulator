@@ -109,6 +109,25 @@ fn external_root_signature_binds_a_stripped_mesh_shader() {
     assert!(parse_root_signature(&wrapped).is_err());
 }
 
+#[test]
+fn external_root_signature_binds_stripped_graphics_and_compute_shaders() {
+    let body = [2u32, 1, 24, 0, 0, 0, 2, 0, 36, 5, 2, 0]
+        .map(u32::to_le_bytes)
+        .concat();
+    let root = parse_root_signature(&body).unwrap();
+    for (stage, base, output) in [
+        (Stage::Vertex, 8, vec![sig("SV_Position", 1, 3, 0, 0xf)]),
+        (Stage::Pixel, 8, vec![sig("SV_Target", 0, 3, 0, 0xf)]),
+        (Stage::Compute, 4, vec![]),
+    ] {
+        let words = [0xf420_0100 | (base / 2), 0xfa00_0000, S_ENDPGM];
+        let mut ex = shader(stage, &words, vec![], output, None);
+        ex.root_sig = Some(root.clone());
+        let translated = translate(&ex).unwrap_or_else(|error| panic!("{stage:?}: {error}"));
+        assert!(translated.hlsl.contains("register(b5, space2)"), "{stage:?}: {}", translated.hlsl);
+    }
+}
+
 /// A pixel shader that writes the integer 5 to a `uint4` render target through the default
 /// pack-and-export tail. Converting the integer through float-to-half (what the tail does
 /// literally) would give 0; the integer itself must be exported.

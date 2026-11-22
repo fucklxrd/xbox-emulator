@@ -1064,7 +1064,7 @@ unsafe fn gpu(list: *mut c_void) -> Option<Gpu> {
 
 #[derive(Clone)]
 enum PsSrc {
-    Xbox(Arc<Vec<u8>>, u64, [u8; 8]),
+    Xbox(Arc<Vec<u8>>, u64, [u8; 8], Option<Arc<[u8]>>),
     #[cfg(test)]
     Hlsl(String, String),
 }
@@ -1086,8 +1086,12 @@ fn note_ps_src(code: &[u8], src: PsSrc) {
 }
 
 pub fn note_translated(code: &[u8], blob: &[u8], hash: u64, rtfmt: &[u8; 8]) {
+    note_translated_with_root(code, blob, hash, rtfmt, None);
+}
+
+pub(crate) fn note_translated_with_root(code: &[u8], blob: &[u8], hash: u64, rtfmt: &[u8; 8], root: Option<&[u8]>) {
     if shader_kind(code) == Some(0) && ps_has_uav(code) == Some(true) {
-        note_ps_src(code, PsSrc::Xbox(Arc::new(blob.to_vec()), hash, *rtfmt));
+        note_ps_src(code, PsSrc::Xbox(Arc::new(blob.to_vec()), hash, *rtfmt, root.map(Arc::from)));
     }
 }
 
@@ -1104,7 +1108,7 @@ fn strip_ps(code: &[u8]) -> Result<Arc<Vec<u8>>, String> {
     let src = PS_SRC.lock().unwrap_or_else(|e| e.into_inner()).as_ref().and_then(|m| m.get(&k.0).cloned()).filter(|e| e.0 == code.len() && e.1 == k.1).map(|e| e.2);
     let r = match src {
         None => Err("its translation source was not kept".to_string()),
-        Some(PsSrc::Xbox(blob, hash, rtfmt)) => crate::shader_xlat::translate_edited(&blob, hash, &rtfmt, &strip::strip_uav_writes),
+        Some(PsSrc::Xbox(blob, hash, rtfmt, root)) => crate::shader_xlat::translate_edited_with_root(&blob, hash, &rtfmt, &strip::strip_uav_writes, root.as_deref()),
         #[cfg(test)]
         Some(PsSrc::Hlsl(h, profile)) => strip::strip_uav_writes(&h).and_then(|s| tombox_xshader::dxc::compile(&s, &profile)),
     }
