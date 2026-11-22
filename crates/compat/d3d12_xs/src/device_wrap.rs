@@ -1289,7 +1289,8 @@ unsafe extern "system" fn create_compute_pso_x(
     }
     let p = u64::from_le_bytes(desc[8..16].try_into().unwrap()) as *const u8;
     let n = u64::from_le_bytes(desc[16..24].try_into().unwrap()) as usize;
-    let code = match unsafe { crate::shader_xlat::translate(p, n) } {
+    let root = u64::from_le_bytes(desc[0..8].try_into().unwrap()) as *mut c_void;
+    let code = match unsafe { crate::shader_xlat::translate_for_pipeline(p, n, [0; 8], root) } {
         Ok(c) => c,
         Err(e) => {
             if FAIL.fetch_add(1, Ordering::Relaxed) < 6 {

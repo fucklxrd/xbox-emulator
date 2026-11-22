@@ -296,10 +296,6 @@ fn translate_uncached_with(blob: &[u8], hash: u64, rtfmt: &[u8; 8], edit: Option
 
 /// Translate an Xbox shader blob to PC bytecode (cached). `ptr/len` come from a
 /// D3D12_SHADER_BYTECODE in the title's PSO desc.
-pub unsafe fn translate(ptr: *const u8, len: usize) -> Cached {
-    translate_for_targets(ptr, len, [0; 8])
-}
-
 pub fn retranslate(blob: &Arc<Vec<u8>>, hash: u64, rtfmt: [u8; 8]) -> Result<Arc<Vec<u8>>, String> {
     let v = std::panic::catch_unwind(|| translate_uncached(blob, hash, &rtfmt)).unwrap_or_else(|_| Err("translator panicked".to_string()))?;
     let v = Arc::new(v);
@@ -626,12 +622,28 @@ pub unsafe fn translate_for_targets(ptr: *const u8, len: usize, rtfmt: [u8; 8]) 
     entry
 }
 
-pub fn needs_external_root_data(blob: &[u8]) -> bool {
+/// Translate a shader using the supplied pipeline root when the Xbox container omits RTS0.
+///
+/// The bytecode must be readable for its stated length. A nonnull root must be a live
+/// ID3D12RootSignature for the duration of translation.
+pub unsafe fn translate_for_pipeline(ptr: *const u8, len: usize, rtfmt: [u8; 8], root: *mut core::ffi::c_void) -> Cached {
+    if !root.is_null() && !ptr.is_null() && (32..=0x40_0000).contains(&len) {
+        let blob = core::slice::from_raw_parts(ptr, len);
+        if needs_external_root_data(blob) {
+            if let Some(data) = crate::console_slots_mesh::root_data(root) {
+                return translate_with_pipeline_root(blob, &data, rtfmt);
+            }
+        }
+    }
+    translate_for_targets(ptr, len, rtfmt)
+}
+
+fn needs_external_root_data(blob: &[u8]) -> bool {
     (32..=0x40_0000).contains(&blob.len())
         && tombox_xshader::Dxbc::parse(blob).is_ok_and(|dxbc| dxbc.chunk(b"RTS0").is_none())
 }
 
-pub fn translate_with_pipeline_root(blob: &[u8], root: &[u8], rtfmt: [u8; 8]) -> Cached {
+fn translate_with_pipeline_root(blob: &[u8], root: &[u8], rtfmt: [u8; 8]) -> Cached {
     let hash = fnv1a(blob);
     let entry = pipeline_root_cell((hash, rtfmt), root);
     entry.get_or_init(|| {
