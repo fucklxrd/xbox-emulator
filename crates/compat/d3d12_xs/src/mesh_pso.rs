@@ -79,13 +79,20 @@ pub fn validate(stream: &[u8], subs: &[(u32, usize)]) -> Result<(), String> {
 
 pub const AS_ROOT_FLAG_ERR: &str = "When an amplification shader is used, the root signature must use D3D12XBOX_ROOT_SIGNATURE_FLAG_FORCE_MEMORY_BASED_ABI flag";
 
+fn pipeline_root(stream: &[u8], subs: &[(u32, usize)]) -> u64 {
+    subs.iter()
+        .find(|(ty, _)| *ty == SUB_ROOT_SIGNATURE)
+        .map(|(_, offset)| u64::from_le_bytes(stream[*offset..*offset + 8].try_into().unwrap()))
+        .unwrap_or(0)
+}
+
 pub fn as_root_rule(stream: &[u8], subs: &[(u32, usize)], flags_of: &dyn Fn(u64) -> Option<u32>) -> Result<(), String> {
     let code = |t: u32| subs.iter().find(|(x, _)| *x == t).map(|(_, o)| bytecode(stream, *o)).filter(|(p, n)| *p != 0 && *n != 0);
     let Some((ap, an)) = code(SUB_AS) else { return Ok(()) };
     if code(SUB_MS).is_none() {
         return Ok(());
     }
-    let rs = subs.iter().find(|(t, _)| *t == SUB_ROOT_SIGNATURE).map(|(_, o)| u64::from_le_bytes(stream[*o..*o + 8].try_into().unwrap())).unwrap_or(0);
+    let rs = pipeline_root(stream, subs);
     let flags = if rs != 0 {
         flags_of(rs).ok_or_else(|| format!("amplification PSO root signature {rs:#x} was not created through the console CreateRootSignature, its flags are unknown"))?
     } else {
@@ -143,12 +150,16 @@ pub unsafe fn create_pipeline_state(real: *mut c_void, desc: *const [u64; 2], ri
         return E_INVALIDARG;
     }
     let stream = core::slice::from_raw_parts(ptr as *const u8, size as usize);
-    let rule = parse(stream).and_then(|s| as_root_rule(stream, &s, &|rs| crate::console_slots_mesh::root_flags(rs as usize)));
-    if let Err(e) = rule {
-        record("d3d12_xs", "CreatePipelineState", &format!("{e} -> E_INVALIDARG"));
-        return E_INVALIDARG;
-    }
-    let root = parse(stream).ok().and_then(|s| s.iter().find(|(t, _)| *t == 0).map(|&(_, o)| bytecode(stream, o).0)).unwrap_or(0);
+    let root = match parse(stream).and_then(|subs| {
+        as_root_rule(stream, &subs, &|rs| crate::console_slots_mesh::root_flags(rs as usize))?;
+        Ok(pipeline_root(stream, &subs))
+    }) {
+        Ok(root) => root,
+        Err(e) => {
+            record("d3d12_xs", "CreatePipelineState", &format!("{e} -> E_INVALIDARG"));
+            return E_INVALIDARG;
+        }
+    };
     let xlat = |ty: u32, b: &[u8], (n, f): (u32, [u32; 8])| {
         if ty == SUB_MS && root != 0 && crate::shader_xlat::needs_external_root_data(b) {
             if let Some(data) = crate::console_slots_mesh::root_data(root as *mut c_void) {
@@ -250,6 +261,16 @@ mod tests {
         assert_eq!(subs, vec![(21, 4), (17, 68)]);
         assert_eq!(s[4 + 52], 1);
         assert_eq!(inner_layout(11), Some((4, 52)));
+    }
+
+    #[test]
+    fn root_signature_can_be_the_last_stream_subobject() {
+        let mut stream = Vec::new();
+        push(&mut stream, SUB_ROOT_SIGNATURE, &0x1234u64.to_le_bytes());
+        let subs = parse(&stream).unwrap();
+
+        assert_eq!(stream.len(), 16);
+        assert_eq!(pipeline_root(&stream, &subs), 0x1234);
     }
 
     #[test]
