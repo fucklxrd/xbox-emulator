@@ -699,18 +699,35 @@ fn nz(x: u64) -> u32 {
     (x != 0) as u32
 }
 
-fn bfe64(a: u64, b: u32, signed: bool) -> u64 {
-    let o = b & 63;
-    let w = (b >> 16) & 127;
-    if w == 0 {
+// RDNA2 SOP2 encodes a seven-bit width. Bits beyond the source register
+// are zero-filled for unsigned extracts and sign-filled for signed extracts.
+fn scalar_bfe(a: u64, control: u32, bits: u32, signed: bool) -> u64 {
+    let offset = control & (bits - 1);
+    let width = ((control >> 16) & 127).min(bits - offset);
+    if width == 0 {
         return 0;
     }
-    let x = a >> o;
-    if w >= 64 {
-        return x;
+    let field = (a >> offset) & (u64::MAX >> (64 - width));
+    if signed {
+        let sign = 1u64 << (width - 1);
+        (field ^ sign).wrapping_sub(sign)
+    } else {
+        field
     }
-    let v = x & ((1u64 << w) - 1);
-    if signed && (v >> (w - 1)) & 1 != 0 { v | !((1u64 << w) - 1) } else { v }
+}
+
+#[test]
+fn scalar_bfe_reference_handles_widths_at_and_past_register_boundaries() {
+    for (bits, offset) in [(32, 31), (64, 63)] {
+        let high = 1u64 << offset;
+        let ctrl = |width: u32, offset: u32| (width << 16) | offset;
+        assert_eq!(scalar_bfe(high, ctrl(0, offset), bits, true), 0);
+        for width in [1, 31, 32, 33, 63, 64, 65, 127] {
+            assert_eq!(scalar_bfe(high, ctrl(width, offset), bits, false), 1);
+            assert_eq!(scalar_bfe(high, ctrl(width, offset), bits, true), u64::MAX);
+        }
+        assert_eq!(scalar_bfe(high, ctrl(bits, 0), bits, false), high);
+    }
 }
 
 fn wqm(x: u32) -> u32 {
@@ -795,10 +812,20 @@ fn scalar_sop2() {
         s2w(&mut c, "s_ashr_i64", 0x23, a, s, 1, r, nz(r));
     }
     for &(a, b) in &[(0x8123_4567_89ab_cdefu64, 0x0008_0004u32), (0x8123_4567_89ab_cdef, 0x0020_0010), (0x8123_4567_89ab_cdef, 0x0028_001c), (0x8123_4567_89ab_cdef, 0x0004_003c), (0x8123_4567_89ab_cdef, 0x0000_0008), (0x8123_4567_89ab_cdef, 0x003f_0001), (0x0000_0000_f000_0000, 0x0004_001c)] {
-        let r = bfe64(a, b, false);
+        let r = scalar_bfe(a, b, 64, false);
         s2w(&mut c, "s_bfe_u64", 0x29, a, b as u64, 0, r, nz(r));
-        let r = bfe64(a, b, true);
+        let r = scalar_bfe(a, b, 64, true);
         s2w(&mut c, "s_bfe_i64", 0x2a, a, b as u64, 0, r, nz(r));
+    }
+    for width in [0, 1, 31, 32, 33, 63, 64, 65, 127] {
+        for offset in [0, 31, 32, 63] {
+            let a = 0x8123_4567_89ab_cdef;
+            let b = (width << 16) | offset;
+            for (m, op, signed) in [("s_bfe_u64", 0x29, false), ("s_bfe_i64", 0x2a, true)] {
+                let r = scalar_bfe(a, b, 64, signed);
+                s2w(&mut c, m, op, a, b as u64, 0, r, nz(r));
+            }
+        }
     }
     c.run_both("sop2");
 }

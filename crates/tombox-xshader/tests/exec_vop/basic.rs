@@ -387,9 +387,9 @@ fn salu_basic() {
             s2(&mut c, "s_ashr_i32", 0x22, a, b, 0, r, nz(r as u64));
             s2(&mut c, "s_mul_i32", 0x26, a, b, 1, a.wrapping_mul(b), 1);
             let bb = (b & 31) | ((a.rotate_left(5) & 0x3f) << 16);
-            let r = bfe(a, bb, bb >> 16, false);
+            let r = scalar_bfe(a as u64, bb, 32, false) as u32;
             s2(&mut c, "s_bfe_u32", 0x27, a, bb, 0, r, nz(r as u64));
-            let r = bfe(a, bb, bb >> 16, true);
+            let r = scalar_bfe(a as u64, bb, 32, true) as u32;
             s2(&mut c, "s_bfe_i32", 0x28, a, bb, 0, r, nz(r as u64));
             scmp(&mut c, "s_cmp_gt_i32", 0x02, a as u64, b as u64, ((a as i32) > (b as i32)) as u32);
             scmp(&mut c, "s_cmp_ge_i32", 0x03, a as u64, b as u64, ((a as i32) >= (b as i32)) as u32);
@@ -405,6 +405,16 @@ fn salu_basic() {
         s1(&mut c, "s_brev_b32", 0x0b, a, 0x5555, 1, a.reverse_bits(), 1);
         for &d0 in &[0u32, 0xffff_ffff, 0x8000_0001] {
             s1(&mut c, "s_bitset0_b32", 0x1b, a, d0, 1, d0 & !(1 << (a & 31)), 1);
+        }
+    }
+    for width in [0, 1, 31, 32, 33, 63, 64, 65, 127] {
+        for offset in [0, 15, 31] {
+            let a = 0x8123_4567;
+            let b = (width << 16) | offset;
+            for (m, op, signed) in [("s_bfe_u32", 0x27, false), ("s_bfe_i32", 0x28, true)] {
+                let r = scalar_bfe(a as u64, b, 32, signed) as u32;
+                s2(&mut c, m, op, a, b, 0, r, nz(r as u64));
+            }
         }
     }
     let q: [u64; 6] = [0, 1, 0x8000_0000_0000_0000, u64::MAX, 0x0123_4567_89ab_cdef, 0x0000_0001_0000_0000];
