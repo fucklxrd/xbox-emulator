@@ -8,6 +8,10 @@ pub static CONSOLE: ConsoleDll = ConsoleDll::new("mfplat.dll", "TOMBOX_MFPLAT_CO
 
 static SIDE_STARTS: AtomicI32 = AtomicI32::new(0);
 static GATE: Mutex<()> = Mutex::new(());
+
+pub fn gate() -> std::sync::MutexGuard<'static, ()> {
+    GATE.lock().unwrap_or_else(|e| e.into_inner())
+}
 static MODULE: OnceLock<usize> = OnceLock::new();
 
 extern "system" {
@@ -68,8 +72,7 @@ fn proc<T: Copy>(m: usize, name: &str) -> Option<T> {
     console_image::symbol(m, name).map(|p| unsafe { core::mem::transmute_copy(&p) })
 }
 
-pub fn on_startup(version: u32, flags: u32) {
-    let _g = GATE.lock().unwrap_or_else(|e| e.into_inner());
+pub fn on_startup(_held: &std::sync::MutexGuard<'static, ()>, version: u32, flags: u32) {
     let m = module();
     let Some(f) = proc::<StartupFn>(m, "MFStartup") else { return };
     let hr = unsafe { f(version, flags) };
@@ -80,8 +83,7 @@ pub fn on_startup(version: u32, flags: u32) {
     }
 }
 
-pub fn on_shutdown() {
-    let _g = GATE.lock().unwrap_or_else(|e| e.into_inner());
+pub fn on_shutdown(_held: &std::sync::MutexGuard<'static, ()>) {
     if SIDE_STARTS.load(Ordering::SeqCst) <= 0 {
         return;
     }

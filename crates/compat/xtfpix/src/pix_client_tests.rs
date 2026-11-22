@@ -36,6 +36,7 @@ static RELEASE: AtomicBool = AtomicBool::new(false);
 static LEVEL: AtomicI32 = AtomicI32::new(4);
 static LEVEL_AT_HANDSHAKE: AtomicI32 = AtomicI32::new(-1);
 static LEVEL_SETS: Mutex<Vec<u32>> = Mutex::new(Vec::new());
+static QUIET_LOCK: Mutex<()> = Mutex::new(());
 
 fn lock<T>(m: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {
     m.lock().unwrap_or_else(|e| e.into_inner())
@@ -520,6 +521,7 @@ fn create_pix_client_handshakes_with_ported_pix_server() {
 
 #[test]
 fn create_pix_client_validates_address_before_connecting() {
+    let _q = lock(&QUIET_LOCK);
     unsafe {
         let mut p = 0x77usize as *mut c_void;
         let e = w("");
@@ -574,6 +576,7 @@ fn handshake_reply_shapes_map_to_console_errors() {
 
 #[test]
 fn quiet_factory_silences_xtf_logging_for_the_call() {
+    let _q = lock(&QUIET_LOCK);
     let _g = PORT_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     unsafe extern "C" fn get() -> i32 {
         LEVEL.load(Ordering::Acquire)
@@ -926,7 +929,7 @@ fn remote_pix_client_addresses_fail_offline() {
                 let s = w(a);
                 let mut p = 0x5usize as *mut c_void;
                 let t0 = Instant::now();
-                let hr = if a.starts_with("192") { XtfCreatePixClientQuiet(s.as_ptr(), &IID_PIX_CLIENT, &mut p) } else { XtfCreatePixClient(s.as_ptr(), &IID_PIX_CLIENT, &mut p) };
+                let hr = XtfCreatePixClient(s.as_ptr(), &IID_PIX_CLIENT, &mut p);
                 (hr, p as usize, t0.elapsed())
             })
         })
@@ -970,10 +973,8 @@ fn console_dll() -> Option<usize> {
 
 #[test]
 fn oracle_console_factory_argument_errors_match() {
-    let Some(h) = console_dll() else {
-        eprintln!("console xtfpix.dll not loadable; oracle skipped");
-        return;
-    };
+    let _q = lock(&QUIET_LOCK);
+    let h = console_dll().expect("console xtfpix.dll did not load with LOAD_WITH_ALTERED_SEARCH_PATH");
     unsafe {
         for name in ["XtfCreatePixClient\0", "XtfCreatePixClientQuiet\0"] {
             let p = GetProcAddress(h as *mut c_void, name.as_ptr());

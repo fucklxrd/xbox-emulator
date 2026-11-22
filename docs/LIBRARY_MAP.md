@@ -31,7 +31,7 @@ Upstream's metric set (same definitions as upstream `tools/progress/gen.py`, For
 | shader_stages | 0 | 8 | 0.0 |
 | milestones | 9 | 18 | 50.0 |
 | titles_examined | 6 | - | - |
-| console_exports | 2070 | 2159 | 95.88 |
+| console_exports | 2083 | 2159 | 96.48 |
 | shader_compile_lobby_frame | 139 | 139 | 100.0 |
 | shader_compile_fixtures | 25 | 25 | 100.0 |
 | shader_compile_full_sweep | not published | 105506 | - |
@@ -41,8 +41,8 @@ Upstream's metric set (same definitions as upstream `tools/progress/gen.py`, For
 | title_imports_Terraria | 61 | 61 | 100.0 |
 | title_imports_Trackmania | 48 | 48 | 100.0 |
 | title_imports_Minecraft | 34 | 35 | 97.14 |
-| console_exports_targeted | 2070 | 2153 | 96.14 |
-| console_exports_not_targeted | not published | 6 | - |
+| console_exports_targeted | 2083 | 2155 | 96.66 |
+| console_exports_not_targeted | not published | 4 | - |
 
 Shader compile: all 139 shaders of the lobby frame compile with DXC (TomBox `docs/DEVELOPMENT_LOG.md:894`); 25/25 fixtures compile (`:672`). The full-library compile sweep (`:706`) has no published final count, so no compile badge is shown.
 
@@ -154,11 +154,11 @@ Listed: imports from Xbox console libraries only. Not listed: 1168 imports a PC 
 | Function | Status | Implemented in / evidence |
 |---|---|---|
 | `D3D12XboxCreateDevice` | implemented | [crates/compat/d3d12_xs/src/lib.rs](https://github.com/drycheetah84/TomBox/blob/master/crates/compat/d3d12_xs/src/lib.rs) (console 0x14e0: NULL parameters -> E_INVALIDARG before anything else, then *ppDevice cleared; host D3D12 device wrapped in the Scarlett vtable layer; create_device_tests) |
-| `D3D12CreateDevice` | implemented | [crates/compat/d3d12_xs/src/lib.rs](https://github.com/drycheetah84/TomBox/blob/master/crates/compat/d3d12_xs/src/lib.rs) (console 0x1680: builds the default 0x48-byte creation parameters (version 0x20004, ProcessDebugFlags from D3D12XboxSetProcessDebugFlags, -1 at +8/+0x18/+0x1c), ignores the feature level and calls D3D12XboxCreateDevice, so the device is the same wrapped Scarlett device; create_device_tests) |
+| `D3D12CreateDevice` | implemented | [crates/compat/d3d12_xs/src/lib.rs](https://github.com/drycheetah84/TomBox/blob/master/crates/compat/d3d12_xs/src/lib.rs) (console 0x1680 (19041 build 0x1790): builds the default creation parameters for the title console OS build (console_os_build, as kernel32legacy_19041 routing): 0x48 bytes version 0x20004 on 22000+, 0x40 bytes version 0x20002 on 19041; ProcessDebugFlags at +4, -1 at +8/+0x18/+0x1c; ignores the feature level and calls D3D12XboxCreateDevice, so the device is the same wrapped Scarlett device; create_device_tests) |
 | `IID_ID3D12Device` | implemented | [crates/compat/d3d12_xs/src/lib.rs](https://github.com/drycheetah84/TomBox/blob/master/crates/compat/d3d12_xs/src/lib.rs) |
 | `D3D12SerializeRootSignature` | implemented | [crates/compat/d3d12_xs/src/lib.rs](https://github.com/drycheetah84/TomBox/blob/master/crates/compat/d3d12_xs/src/lib.rs) (code thunk, not a PE forwarder: host d3d12.dll) |
 | `D3D12SerializeVersionedRootSignature` | implemented | [crates/compat/d3d12_xs/src/lib.rs](https://github.com/drycheetah84/TomBox/blob/master/crates/compat/d3d12_xs/src/lib.rs) (code thunk, not a PE forwarder: host d3d12.dll) |
-| `D3D12XboxSetProcessDebugFlags` | implemented | [crates/compat/d3d12_xs/src/lib.rs](https://github.com/drycheetah84/TomBox/blob/master/crates/compat/d3d12_xs/src/lib.rs) (console 0x1010: stores flags & 0x83f00001, returns S_OK; the stored flags select the debug driver / PC debug layer at the next device creation) |
+| `D3D12XboxSetProcessDebugFlags` | implemented | [crates/compat/d3d12_xs/src/lib.rs](https://github.com/drycheetah84/TomBox/blob/master/crates/compat/d3d12_xs/src/lib.rs) (console 0x1010 (19041 build 0x1280): stores flags & 0x83f00001 on OS build 22000+, flags & 0x81f00001 on 19041 (title console OS build), returns S_OK; the stored flags select the debug driver / PC debug layer at the next device creation; tests/process_debug_19041.rs) |
 
 </details>
 
@@ -327,8 +327,8 @@ Listed: imports from Xbox console libraries only. Not listed: 1218 imports a PC 
 |---|---|---|
 | `CreateWindowExA` | forwarded | ext-ms-win-rtcore-ntuser-window-ansi-l1-1-0.dll -> console host minuserx.dll; [crates/compat/minuserx/src/lib.rs](https://github.com/drycheetah84/TomBox/blob/master/crates/compat/minuserx/src/lib.rs) (PE forwarder to user32.CreateWindowExA; same Win32 signature, windows are real PC user32 windows) |
 | `RegisterClassExA` | forwarded | ext-ms-win-rtcore-ntuser-window-ansi-l1-1-0.dll -> console host minuserx.dll; [crates/compat/minuserx/src/lib.rs](https://github.com/drycheetah84/TomBox/blob/master/crates/compat/minuserx/src/lib.rs) (PE forwarder to user32.RegisterClassExA; same Win32 signature, windows are real PC user32 windows) |
-| `GetWindowLongPtrA` | implemented | ext-ms-win-rtcore-ntuser-window-ansi-l1-1-0.dll -> console host minuserx.dll; [crates/compat/minuserx/src/lib.rs](https://github.com/drycheetah84/TomBox/blob/master/crates/compat/minuserx/src/lib.rs) (console GetWindowLongPtrA is the same code as GetWindowLongPtrW (no ANSI/Unicode split); here both read through the user32 variant matching the window charset (IsWindowUnicode), so GWLP_WNDPROC returns the registered proc for ANSI (CreateWindowExA/RegisterClassExA) and Unicode windows alike instead of a CallWindowProc handle) |
-| `SetWindowLongPtrA` | implemented | ext-ms-win-rtcore-ntuser-window-ansi-l1-1-0.dll -> console host minuserx.dll; [crates/compat/minuserx/src/lib.rs](https://github.com/drycheetah84/TomBox/blob/master/crates/compat/minuserx/src/lib.rs) (console SetWindowLongPtrA is the same code as SetWindowLongPtrW; here both write through the user32 variant matching the window charset (IsWindowUnicode), so a new GWLP_WNDPROC neither changes the window charset nor is wrapped in a conversion thunk) |
+| `GetWindowLongPtrA` | implemented | ext-ms-win-rtcore-ntuser-window-ansi-l1-1-0.dll -> console host minuserx.dll; [crates/compat/minuserx/src/lib.rs](https://github.com/drycheetah84/TomBox/blob/master/crates/compat/minuserx/src/lib.rs) (console index check (0xa480 get, 0xa66e set): index >= 0, GWLP_USERDATA (-21) or GWLP_WNDPROC (-4), any other index -> SetLastError(87) and 0; a successful call leaves LastError 0; console GetWindowLongPtrA is the same code as GetWindowLongPtrW (no ANSI/Unicode split); here both read through the user32 variant matching the window charset (IsWindowUnicode), so GWLP_WNDPROC returns the registered proc for ANSI and Unicode windows alike; by_name::ansi_window_wndproc_reads_back_registered_proc) |
+| `SetWindowLongPtrA` | implemented | ext-ms-win-rtcore-ntuser-window-ansi-l1-1-0.dll -> console host minuserx.dll; [crates/compat/minuserx/src/lib.rs](https://github.com/drycheetah84/TomBox/blob/master/crates/compat/minuserx/src/lib.rs) (console index check (0xa480 get, 0xa66e set): index >= 0, GWLP_USERDATA (-21) or GWLP_WNDPROC (-4), any other index -> SetLastError(87) and 0; a successful call leaves LastError 0; console SetWindowLongPtrA is the same code as SetWindowLongPtrW; here both write through the user32 variant matching the window charset (IsWindowUnicode), so a new GWLP_WNDPROC neither changes the window charset nor is wrapped in a conversion thunk) |
 
 </details>
 
@@ -541,7 +541,7 @@ Listed: imports from Xbox console libraries only. Not listed: 2558 imports a PC 
 | `DefWindowProcW` | forwarded | ext-ms-win-rtcore-ntuser-window-l1-1-0.dll -> console host minuserx.dll; [crates/compat/minuserx/src/lib.rs](https://github.com/drycheetah84/TomBox/blob/master/crates/compat/minuserx/src/lib.rs) (PE forwarder to user32.DefWindowProcW; console body returns 1 for message 1 and 0 otherwise because its CoreWindow windows never need default processing; forwarded because CreateWindowEx forwards to user32 and real PC windows need PC default processing (WM_NCCREATE must return TRUE)) |
 | `CreateWindowExW` | forwarded | ext-ms-win-rtcore-ntuser-window-l1-1-0.dll -> console host minuserx.dll; [crates/compat/minuserx/src/lib.rs](https://github.com/drycheetah84/TomBox/blob/master/crates/compat/minuserx/src/lib.rs) (PE forwarder to user32.CreateWindowExW; same Win32 signature, windows are real PC user32 windows) |
 | `ShowWindow` | forwarded | ext-ms-win-rtcore-ntuser-window-l1-1-0.dll -> console host minuserx.dll; [crates/compat/minuserx/src/lib.rs](https://github.com/drycheetah84/TomBox/blob/master/crates/compat/minuserx/src/lib.rs) (PE forwarder to user32.ShowWindow; same Win32 signature, windows are real PC user32 windows) |
-| `SetWindowLongPtrW` | implemented | ext-ms-win-rtcore-ntuser-window-l1-1-0.dll -> console host minuserx.dll; [crates/compat/minuserx/src/lib.rs](https://github.com/drycheetah84/TomBox/blob/master/crates/compat/minuserx/src/lib.rs) (same code as SetWindowLongPtrA: user32 variant chosen by IsWindowUnicode) |
+| `SetWindowLongPtrW` | implemented | ext-ms-win-rtcore-ntuser-window-l1-1-0.dll -> console host minuserx.dll; [crates/compat/minuserx/src/lib.rs](https://github.com/drycheetah84/TomBox/blob/master/crates/compat/minuserx/src/lib.rs) (console index check (0xa480 get, 0xa66e set): index >= 0, GWLP_USERDATA (-21) or GWLP_WNDPROC (-4), any other index -> SetLastError(87) and 0; a successful call leaves LastError 0; same code as SetWindowLongPtrA: user32 variant chosen by IsWindowUnicode) |
 | `RegisterClassExW` | forwarded | ext-ms-win-rtcore-ntuser-window-l1-1-0.dll -> console host minuserx.dll; [crates/compat/minuserx/src/lib.rs](https://github.com/drycheetah84/TomBox/blob/master/crates/compat/minuserx/src/lib.rs) (PE forwarder to user32.RegisterClassExW; same Win32 signature, windows are real PC user32 windows) |
 
 </details>
@@ -578,7 +578,7 @@ Listed: imports from Xbox console libraries only. Not listed: 2558 imports a PC 
 |---|---|---|
 | `D3DMapEsramMemory` | implemented | [crates/compat/d3d12_x/src/lib.rs](https://github.com/drycheetah84/TomBox/blob/master/crates/compat/d3d12_x/src/lib.rs) (flags 1/3 only (else E_FAIL, as console); one 32 MiB ESRAM section, each page-list entry maps that 64 KiB ESRAM page at VA+i*64K, so pages alias across VAs and keep contents across remaps; a caller reservation around the range is kept) |
 | `D3D12XboxSetProcessDebugFlags` | implemented | [crates/compat/d3d12_x/src/lib.rs](https://github.com/drycheetah84/TomBox/blob/master/crates/compat/d3d12_x/src/lib.rs) (stores flags & 0x81f00001 like the console runtime (0x1010); D3D12CreateDevice uses them as the creation-parameter flags) |
-| `D3D12XboxCreateDevice` | implemented | [crates/compat/d3d12_x/src/lib.rs](https://github.com/drycheetah84/TomBox/blob/master/crates/compat/d3d12_x/src/lib.rs) (console 0x14b0: NULL parameters -> E_INVALIDARG, *ppDevice cleared, ProcessDebugFlags (+4) stored as the process flags; the 0x28-byte Xbox One parameters are copied into a zeroed 0x48-byte Scarlett block with version 0x20004 (both console runtimes read the same fields at +0..+0x24) and handed to the emulator's d3d12_xs.dll; host D3D12CreateDevice if d3d12_xs is absent; rs_strip_tests::xbox_one_params_translate_to_scarlett_layout) |
+| `D3D12XboxCreateDevice` | implemented | [crates/compat/d3d12_x/src/lib.rs](https://github.com/drycheetah84/TomBox/blob/master/crates/compat/d3d12_x/src/lib.rs) (console 0x14b0: NULL parameters -> E_INVALIDARG, *ppDevice cleared, ProcessDebugFlags (+4) stored as the process flags; a NULL ppDevice still creates through a local out and returns the creation HRESULT (no S_FALSE); the 0x28-byte Xbox One parameters are copied into a zeroed 0x48-byte Scarlett block with version 0x20004 and handed to the emulator d3d12_xs.dll; host D3D12CreateDevice if d3d12_xs is absent; tests::create_device_null_out_returns_the_creation_result_like_console) |
 | `D3D12SerializeRootSignature` | implemented | [crates/compat/d3d12_x/src/lib.rs](https://github.com/drycheetah84/TomBox/blob/master/crates/compat/d3d12_x/src/lib.rs) (host d3d12.dll after clearing the Xbox-only root flags (0x01000000, 0x02000000, 0x80000000) from a copy of the description; the bits are put back into the returned RTS0 blob, as d3d12_xs does; rs_strip_tests) |
 
 </details>
@@ -689,15 +689,15 @@ Listed: imports from Xbox console libraries only. Not listed: 1290 imports a PC 
 
 ### Trackmania: GbxGame.exe
 
-<details><summary><b>d3d12_x.dll</b>: 5 functions; implemented 5</summary>
+<details><summary><b>d3d12_x.dll</b>: 5 functions; implemented 4, forwarded 1</summary>
 
 | Function | Status | Implemented in / evidence |
 |---|---|---|
 | `D3D12SerializeRootSignature` | implemented | [crates/compat/d3d12_x/src/lib.rs](https://github.com/drycheetah84/TomBox/blob/master/crates/compat/d3d12_x/src/lib.rs) (host d3d12.dll after clearing the Xbox-only root flags (0x01000000, 0x02000000, 0x80000000) from a copy of the description; the bits are put back into the returned RTS0 blob, as d3d12_xs does; rs_strip_tests) |
 | `D3D12SerializeVersionedRootSignature` | implemented | [crates/compat/d3d12_x/src/lib.rs](https://github.com/drycheetah84/TomBox/blob/master/crates/compat/d3d12_x/src/lib.rs) (as D3D12SerializeRootSignature for the versioned description (flags at +0x28); rs_strip_tests) |
 | `D3DMapEsramMemory` | implemented | [crates/compat/d3d12_x/src/lib.rs](https://github.com/drycheetah84/TomBox/blob/master/crates/compat/d3d12_x/src/lib.rs) (flags 1/3 only (else E_FAIL, as console); one 32 MiB ESRAM section, each page-list entry maps that 64 KiB ESRAM page at VA+i*64K, so pages alias across VAs and keep contents across remaps; a caller reservation around the range is kept) |
-| `D3D12XboxCreateDevice` | implemented | [crates/compat/d3d12_x/src/lib.rs](https://github.com/drycheetah84/TomBox/blob/master/crates/compat/d3d12_x/src/lib.rs) (console 0x14b0: NULL parameters -> E_INVALIDARG, *ppDevice cleared, ProcessDebugFlags (+4) stored as the process flags; the 0x28-byte Xbox One parameters are copied into a zeroed 0x48-byte Scarlett block with version 0x20004 (both console runtimes read the same fields at +0..+0x24) and handed to the emulator's d3d12_xs.dll; host D3D12CreateDevice if d3d12_xs is absent; rs_strip_tests::xbox_one_params_translate_to_scarlett_layout) |
-| `D3D12GetDebugInterface` | implemented | [crates/compat/d3d12_x/src/lib.rs](https://github.com/drycheetah84/TomBox/blob/master/crates/compat/d3d12_x/src/lib.rs) (code thunk, not a PE forwarder: host d3d12.dll) |
+| `D3D12XboxCreateDevice` | implemented | [crates/compat/d3d12_x/src/lib.rs](https://github.com/drycheetah84/TomBox/blob/master/crates/compat/d3d12_x/src/lib.rs) (console 0x14b0: NULL parameters -> E_INVALIDARG, *ppDevice cleared, ProcessDebugFlags (+4) stored as the process flags; a NULL ppDevice still creates through a local out and returns the creation HRESULT (no S_FALSE); the 0x28-byte Xbox One parameters are copied into a zeroed 0x48-byte Scarlett block with version 0x20004 and handed to the emulator d3d12_xs.dll; host D3D12CreateDevice if d3d12_xs is absent; tests::create_device_null_out_returns_the_creation_result_like_console) |
+| `D3D12GetDebugInterface` | forwarded | [crates/compat/d3d12_x/src/lib.rs](https://github.com/drycheetah84/TomBox/blob/master/crates/compat/d3d12_x/src/lib.rs) (host d3d12.dll) |
 
 </details>
 
@@ -818,11 +818,11 @@ Listed: imports from Xbox console libraries only. Not listed: 1290 imports a PC 
 
 </details>
 
-<details><summary><b>dxcompiler_x.dll</b>: 1 functions; implemented 1</summary>
+<details><summary><b>dxcompiler_x.dll</b>: 1 functions; forwarded 1</summary>
 
 | Function | Status | Implemented in / evidence |
 |---|---|---|
-| `DxcCreateInstance` | implemented | [crates/compat/dxcompiler_x/src/lib.rs](https://github.com/drycheetah84/TomBox/blob/master/crates/compat/dxcompiler_x/src/lib.rs) (code thunk, not a PE forwarder: official DXC 1.9.2609 (Microsoft-signed dxcompiler.dll + dxil.dll): next to dxcompiler_x, TOMBOX_DXC_DIR, or emulator third_party/dxc; compiles SM 6.0 HLSL to signed DXIL) |
+| `DxcCreateInstance` | forwarded | [crates/compat/dxcompiler_x/src/lib.rs](https://github.com/drycheetah84/TomBox/blob/master/crates/compat/dxcompiler_x/src/lib.rs) (official DXC 1.9.2609 (Microsoft-signed dxcompiler.dll + dxil.dll): next to dxcompiler_x, TOMBOX_DXC_DIR, or emulator third_party/dxc; compiles SM 6.0 HLSL to signed DXIL) |
 
 </details>
 
@@ -883,7 +883,7 @@ Listed: imports from Xbox console libraries only. Not listed: 1290 imports a PC 
 
 </details>
 
-Trackmania console-library import totals (7 binaries): implemented 28, forwarded 16, hooked 4.
+Trackmania console-library import totals (7 binaries): implemented 26, forwarded 18, hooked 4.
 
 Trackmania console OS 10.0.22621.1852, 87 console libraries with console-only exports; vs Fortnite (OS 10.0.19041.3948): 6 DLLs only here, 0 DLLs only there, 110 exports only here in shared DLLs; vs XDefiant (OS 10.0.22000.4429): 0 DLLs only here, 0 DLLs only there, 29 exports only here in shared DLLs; vs Terraria (OS 10.0.22000.4429): 0 DLLs only here, 0 DLLs only there, 29 exports only here in shared DLLs.
 
@@ -915,7 +915,7 @@ Listed: imports from Xbox console libraries only. Not listed: 2086 imports a PC 
 |---|---|---|
 | `DefWindowProcW` | forwarded | ext-ms-win-rtcore-ntuser-window-l1-1-0.dll -> console host minuserx.dll; [crates/compat/minuserx/src/lib.rs](https://github.com/drycheetah84/TomBox/blob/master/crates/compat/minuserx/src/lib.rs) (PE forwarder to user32.DefWindowProcW; console body returns 1 for message 1 and 0 otherwise because its CoreWindow windows never need default processing; forwarded because CreateWindowEx forwards to user32 and real PC windows need PC default processing (WM_NCCREATE must return TRUE)) |
 | `RegisterClassExW` | forwarded | ext-ms-win-rtcore-ntuser-window-l1-1-0.dll -> console host minuserx.dll; [crates/compat/minuserx/src/lib.rs](https://github.com/drycheetah84/TomBox/blob/master/crates/compat/minuserx/src/lib.rs) (PE forwarder to user32.RegisterClassExW; same Win32 signature, windows are real PC user32 windows) |
-| `SetWindowLongPtrW` | implemented | ext-ms-win-rtcore-ntuser-window-l1-1-0.dll -> console host minuserx.dll; [crates/compat/minuserx/src/lib.rs](https://github.com/drycheetah84/TomBox/blob/master/crates/compat/minuserx/src/lib.rs) (same code as SetWindowLongPtrA: user32 variant chosen by IsWindowUnicode) |
+| `SetWindowLongPtrW` | implemented | ext-ms-win-rtcore-ntuser-window-l1-1-0.dll -> console host minuserx.dll; [crates/compat/minuserx/src/lib.rs](https://github.com/drycheetah84/TomBox/blob/master/crates/compat/minuserx/src/lib.rs) (console index check (0xa480 get, 0xa66e set): index >= 0, GWLP_USERDATA (-21) or GWLP_WNDPROC (-4), any other index -> SetLastError(87) and 0; a successful call leaves LastError 0; same code as SetWindowLongPtrA: user32 variant chosen by IsWindowUnicode) |
 | `DestroyWindow` | forwarded | ext-ms-win-rtcore-ntuser-window-l1-1-0.dll -> console host minuserx.dll; [crates/compat/minuserx/src/lib.rs](https://github.com/drycheetah84/TomBox/blob/master/crates/compat/minuserx/src/lib.rs) (PE forwarder to user32.DestroyWindow; same Win32 signature, windows are real PC user32 windows) |
 | `ShowWindow` | forwarded | ext-ms-win-rtcore-ntuser-window-l1-1-0.dll -> console host minuserx.dll; [crates/compat/minuserx/src/lib.rs](https://github.com/drycheetah84/TomBox/blob/master/crates/compat/minuserx/src/lib.rs) (PE forwarder to user32.ShowWindow; same Win32 signature, windows are real PC user32 windows) |
 
@@ -1042,20 +1042,20 @@ Console-related exports of the DLLs in each title's EmbeddedXvd `Windows\System3
 | advapi32.dll | System32/forwarders | yes | 13 | 6 | 7 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | Fortnite 10.0.19041.3948; XDefiant 10.0.22000.4429; Terraria 10.0.22000.4429; Trackmania 10.0.22621.1852 |
 | advapi32legacy.dll | System32 | no | 207 | 5 | 201 | 0 | 0 | 0 | 0 | 1 | 0 | 0 | 1 | 1 | 1 | 1 | 0 | Fortnite 10.0.19041.3948; XDefiant 10.0.22000.4429; Terraria 10.0.22000.4429; Trackmania 10.0.22621.1852 |
 | AudioHALWrapper.dll | System32 | no | 32 | 32 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 30 | 0 | 14 | 30 | 0 | Fortnite 10.0.19041.3948; XDefiant 10.0.22000.4429; Terraria 10.0.22000.4429; Trackmania 10.0.22621.1852 |
-| bootshsvc.dll | System32 | no | 2 | 2 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | Fortnite 10.0.19041.3948; XDefiant 10.0.22000.4429; Terraria 10.0.22000.4429; Trackmania 10.0.22621.1852 |
+| bootshsvc.dll | System32 | no | 2 | 1 | 1 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | Fortnite 10.0.19041.3948; XDefiant 10.0.22000.4429; Terraria 10.0.22000.4429; Trackmania 10.0.22621.1852 |
 | chad.dll | System32 | no | 7 | 6 | 0 | 0 | 0 | 0 | 0 | 1 | 0 | 0 | 0 | 5 | 0 | 0 | 0 | XDefiant 10.0.22000.4429; Terraria 10.0.22000.4429; Trackmania 10.0.22621.1852 |
 | ConIoSrv.dll | System32 | no | 1 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 1 | 0 | 0 | 0 | 0 | 0 | Fortnite 10.0.19041.3948; XDefiant 10.0.22000.4429; Terraria 10.0.22000.4429; Trackmania 10.0.22621.1852 |
 | ConnectedStorageService.ProxyStub.dll | System32 | no | 5 | 5 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | Fortnite 10.0.19041.3948; XDefiant 10.0.22000.4429; Terraria 10.0.22000.4429; Trackmania 10.0.22621.1852 |
-| d3d12_x.dll | System32 | no | 54 | 46 | 0 | 0 | 0 | 0 | 2 | 6 | 0 | 0 | 0 | 0 | 4 | 5 | 0 | Fortnite 10.0.19041.3948; XDefiant 10.0.22000.4429; Terraria 10.0.22000.4429; Trackmania 10.0.22621.1852 |
-| d3d12_xs.dll | System32 | no | 55 | 48 | 0 | 0 | 0 | 0 | 3 | 4 | 0 | 0 | 6 | 3 | 0 | 0 | 3 | Fortnite 10.0.19041.3948; XDefiant 10.0.22000.4429; Terraria 10.0.22000.4429; Trackmania 10.0.22621.1852 |
+| d3d12_x.dll | System32 | no | 54 | 46 | 2 | 0 | 0 | 0 | 0 | 6 | 0 | 0 | 0 | 0 | 4 | 5 | 0 | Fortnite 10.0.19041.3948; XDefiant 10.0.22000.4429; Terraria 10.0.22000.4429; Trackmania 10.0.22621.1852 |
+| d3d12_xs.dll | System32 | no | 55 | 49 | 2 | 0 | 0 | 0 | 0 | 4 | 0 | 0 | 6 | 3 | 0 | 0 | 3 | Fortnite 10.0.19041.3948; XDefiant 10.0.22000.4429; Terraria 10.0.22000.4429; Trackmania 10.0.22621.1852 |
 | dab.dll | System32 | yes | 2 | 0 | 2 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | Fortnite 10.0.19041.3948; XDefiant 10.0.22000.4429; Terraria 10.0.22000.4429; Trackmania 10.0.22621.1852 |
 | dbghelp.dll | System32 | yes | 1 | 1 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | Fortnite 10.0.19041.3948; XDefiant 10.0.22000.4429; Terraria 10.0.22000.4429; Trackmania 10.0.22621.1852 |
-| dxbc2dxil_xs.dll | System32 | no | 1 | 1 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | Fortnite 2020.11015.12200.10000; XDefiant 2206.2209.12105.11142; Terraria 2206.2209.12105.11142; Trackmania 2210.2210.12006.15549 |
-| dxcompiler_x.dll | System32 | no | 2 | 2 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 1 | 0 | Fortnite 2020.11015.12200.10000; XDefiant 2206.2209.12105.11142; Terraria 2206.2209.12105.11142; Trackmania 2210.2210.12006.15549 |
+| dxbc2dxil_xs.dll | System32 | no | 1 | 0 | 1 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | Fortnite 2020.11015.12200.10000; XDefiant 2206.2209.12105.11142; Terraria 2206.2209.12105.11142; Trackmania 2210.2210.12006.15549 |
+| dxcompiler_x.dll | System32 | no | 2 | 0 | 2 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 1 | 0 | Fortnite 2020.11015.12200.10000; XDefiant 2206.2209.12105.11142; Terraria 2206.2209.12105.11142; Trackmania 2210.2210.12006.15549 |
 | dxcompiler_xs.dll | System32 | no | 4 | 0 | 4 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 1 | 0 | 0 | 0 | 0 | Fortnite 2020.11015.12200.10000; XDefiant 2206.2209.12105.11142; Terraria 2206.2209.12105.11142; Trackmania 2210.2210.12006.15549 |
 | EventAggregation.dll | System32 | yes | 1 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 1 | 0 | 0 | 0 | 0 | 0 | Fortnite 10.0.19041.3948; XDefiant 10.0.22000.4429; Terraria 10.0.22000.4429; Trackmania 10.0.22621.1852 |
 | FWPUCLNT.DLL | System32 | yes | 2 | 2 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | Fortnite 10.0.19041.3948; XDefiant 10.0.22000.4429; Terraria 10.0.22000.4429; Trackmania 10.0.22621.1852 |
-| gamecoreclient.dll | System32 | no | 3 | 2 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 1 | 0 | 0 | 0 | 0 | 0 | Fortnite 10.0.19041.3948; XDefiant 10.0.22000.4429; Terraria 10.0.22000.4429; Trackmania 10.0.22621.1852 |
+| gamecoreclient.dll | System32 | no | 3 | 1 | 1 | 0 | 0 | 0 | 1 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | Fortnite 10.0.19041.3948; XDefiant 10.0.22000.4429; Terraria 10.0.22000.4429; Trackmania 10.0.22621.1852 |
 | gamecorecomproxy.dll | System32 | no | 5 | 5 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | Fortnite 10.0.19041.3948; XDefiant 10.0.22000.4429; Terraria 10.0.22000.4429; Trackmania 10.0.22621.1852 |
 | gamingtelemetry.dll | System32 | no | 38 | 38 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | Fortnite 10.0.19041.3948; XDefiant 10.0.22000.4429; Terraria 10.0.22000.4429; Trackmania 10.0.22621.1852 |
 | GCXAudioExt.dll | System32 | no | 12 | 12 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | Fortnite 10.0.19041.3948; XDefiant 10.0.22000.4429; Terraria 10.0.22000.4429; Trackmania 10.0.22621.1852 |
@@ -1082,23 +1082,23 @@ Console-related exports of the DLLs in each title's EmbeddedXvd `Windows\System3
 | GDK XUser (QueryApiImpl) | xgameruntime QueryApiImpl (title call sites, analysis/gdk) | no | 38 | 37 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 1 | 25 | 18 | 32 | 20 | 19 |  |
 | GDK XUserDevice (QueryApiImpl) | xgameruntime QueryApiImpl (title call sites, analysis/gdk) | no | 6 | 6 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 4 | 3 | 6 | 4 | 3 |  |
 | GDK XUserGamertag (QueryApiImpl) | xgameruntime QueryApiImpl (title call sites, analysis/gdk) | no | 1 | 1 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 1 | 1 | 1 | 1 | 1 |  |
-| hix_xs.dll | System32 | no | 8 | 8 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | Fortnite 10.0.19041.3948; XDefiant 10.0.22000.4429; Terraria 10.0.22000.4429; Trackmania 10.0.22621.1852 |
+| hix_xs.dll | System32 | no | 8 | 3 | 5 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | Fortnite 10.0.19041.3948; XDefiant 10.0.22000.4429; Terraria 10.0.22000.4429; Trackmania 10.0.22621.1852 |
 | kernel32.dll | System32/forwarders | yes | 11 | 0 | 11 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | Fortnite 10.0.19041.3948; XDefiant 10.0.22000.4429; Terraria 10.0.22000.4429; Trackmania 10.0.22621.1852 |
 | kernel32legacy.dll | System32 | no | 303 | 2 | 297 | 4 | 0 | 0 | 0 | 0 | 0 | 0 | 2 | 5 | 4 | 6 | 2 | Fortnite 10.0.19041.3948; XDefiant 10.0.22000.4429; Terraria 10.0.22000.4429; Trackmania 10.0.22621.1852 |
 | KernelBase.dll | System32 | yes | 3 | 3 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | Fortnite 10.0.19041.3948; XDefiant 10.0.22000.4429; Terraria 10.0.22000.4429; Trackmania 10.0.22621.1852 |
-| KernelTraceControl.dll | System32 | no | 5 | 5 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | Fortnite 10.0.19041.3948; XDefiant 10.0.22000.4429; Terraria 10.0.22000.4429; Trackmania 10.0.22621.1852 |
+| KernelTraceControl.dll | System32 | no | 5 | 4 | 1 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | Fortnite 10.0.19041.3948; XDefiant 10.0.22000.4429; Terraria 10.0.22000.4429; Trackmania 10.0.22621.1852 |
 | lsasrv.dll | System32 | yes | 5 | 5 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | Fortnite 10.0.19041.3948; XDefiant 10.0.22000.4429; Terraria 10.0.22000.4429; Trackmania 10.0.22621.1852 |
 | mfh264dec.dll | System32 | no | 1 | 1 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | Fortnite None; XDefiant None; Terraria None; Trackmania None |
-| MFH264Enc.dll | System32 | yes | 2 | 2 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | Fortnite None; XDefiant None; Terraria None; Trackmania None |
+| MFH264Enc.dll | System32 | yes | 2 | 1 | 1 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | Fortnite None; XDefiant None; Terraria None; Trackmania None |
 | mfhevcdec.dll | System32 | no | 5 | 4 | 0 | 0 | 0 | 0 | 0 | 1 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | Fortnite None; XDefiant None; Terraria None; Trackmania None |
 | mflnmhelp.dll | System32 | no | 15 | 12 | 0 | 0 | 0 | 0 | 0 | 3 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | Fortnite None; XDefiant None; Terraria None; Trackmania None |
 | mfplat.dll | System32 | yes | 8 | 6 | 1 | 0 | 0 | 0 | 0 | 0 | 0 | 1 | 1 | 0 | 0 | 0 | 0 | Fortnite None; XDefiant None; Terraria None; Trackmania None |
 | minappmodelx.dll | System32 | no | 4 | 4 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 4 | 4 | 4 | 4 | 4 | Fortnite 10.0.19041.3948; XDefiant 10.0.22000.4429; Terraria 10.0.22000.4429; Trackmania 10.0.22621.1852 |
-| minuserx.dll | System32 | no | 74 | 32 | 38 | 0 | 0 | 0 | 4 | 0 | 0 | 0 | 9 | 10 | 12 | 13 | 15 | Fortnite 10.0.19041.3948; XDefiant 10.0.22000.4429; Terraria 10.0.22000.4429; Trackmania 10.0.22621.1852 |
+| minuserx.dll | System32 | no | 74 | 36 | 38 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 9 | 10 | 12 | 13 | 15 | Fortnite 10.0.19041.3948; XDefiant 10.0.22000.4429; Terraria 10.0.22000.4429; Trackmania 10.0.22621.1852 |
 | msave64xgs.dll | System32 | no | 24 | 24 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | Fortnite 10.0.19041.3948; XDefiant 10.0.22000.4429; Terraria 10.0.22000.4429; Trackmania 10.0.22621.1852 |
 | netprofmsvc_c.dll | System32 | no | 3 | 2 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 1 | 0 | 0 | 0 | 0 | 0 | Fortnite 10.0.19041.3948; XDefiant 10.0.22000.4429; Terraria 10.0.22000.4429; Trackmania 10.0.22621.1852 |
-| newbe.dll | System32 | no | 5 | 5 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | Fortnite 2020.11015.12200.10000; XDefiant 2206.2209.12105.11142; Terraria 2206.2209.12105.11142; Trackmania 2210.2210.12006.15549 |
-| newbe_xs.dll | System32 | no | 6 | 6 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | Fortnite 2020.11015.12200.10000; XDefiant 2206.2209.12105.11142; Terraria 2206.2209.12105.11142; Trackmania 2210.2210.12006.15549 |
+| newbe.dll | System32 | no | 5 | 0 | 5 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | Fortnite 2020.11015.12200.10000; XDefiant 2206.2209.12105.11142; Terraria 2206.2209.12105.11142; Trackmania 2210.2210.12006.15549 |
+| newbe_xs.dll | System32 | no | 6 | 0 | 6 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | Fortnite 2020.11015.12200.10000; XDefiant 2206.2209.12105.11142; Terraria 2206.2209.12105.11142; Trackmania 2210.2210.12006.15549 |
 | ntdll.dll | System32 | yes | 4 | 1 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 3 | 0 | 0 | 0 | 0 | 0 | Fortnite 10.0.19041.3948; XDefiant 10.0.22000.4429; Terraria 10.0.22000.4429; Trackmania 10.0.22621.1852 |
 | ole32.dll | System32/forwarders | yes | 2 | 0 | 2 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | Fortnite 10.0.19041.3948; XDefiant 10.0.22000.4429; Terraria 10.0.22000.4429; Trackmania 10.0.22621.1852 |
 | pixevt.dll | System32 | no | 16 | 15 | 0 | 0 | 0 | 0 | 0 | 1 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | Fortnite None; XDefiant None; Terraria None; Trackmania None |
@@ -1106,8 +1106,8 @@ Console-related exports of the DLLs in each title's EmbeddedXvd `Windows\System3
 | pixrt.dll | System32 | no | 3 | 3 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | Fortnite 10.0.19041.3948; XDefiant 10.0.22000.4429; Terraria 10.0.22000.4429; Trackmania 10.0.22621.1852 |
 | pixrt10.dll | System32 | no | 3 | 1 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 2 | 0 | 0 | 0 | 0 | 0 | Fortnite 10.0.19041.3948; XDefiant 10.0.22000.4429; Terraria 10.0.22000.4429; Trackmania 10.0.22621.1852 |
 | RemoteWinRT.dll | System32 | no | 15 | 15 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | Fortnite 10.0.19041.3948; XDefiant 10.0.22000.4429; Terraria 10.0.22000.4429; Trackmania 10.0.22621.1852 |
-| sc_dll.dll | System32 | no | 67 | 64 | 0 | 0 | 0 | 0 | 0 | 3 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | Fortnite 2020.11015.12200.10000; XDefiant 2206.2209.12105.11142; Terraria 2206.2209.12105.11142; Trackmania 2210.2210.12006.15549 |
-| scdxil.dll | System32 | no | 7 | 7 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | Fortnite 2020.11015.12200.10000; XDefiant 2206.2209.12105.11142; Terraria 2206.2209.12105.11142; Trackmania 2210.2210.12006.15549 |
+| sc_dll.dll | System32 | no | 67 | 19 | 45 | 0 | 0 | 0 | 0 | 3 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | Fortnite 2020.11015.12200.10000; XDefiant 2206.2209.12105.11142; Terraria 2206.2209.12105.11142; Trackmania 2210.2210.12006.15549 |
+| scdxil.dll | System32 | no | 7 | 4 | 3 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | Fortnite 2020.11015.12200.10000; XDefiant 2206.2209.12105.11142; Terraria 2206.2209.12105.11142; Trackmania 2210.2210.12006.15549 |
 | sechost.dll | System32 | yes | 1 | 1 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | Fortnite 10.0.19041.3948; XDefiant 10.0.22000.4429; Terraria 10.0.22000.4429; Trackmania 10.0.22621.1852 |
 | secur32.dll | System32 | yes | 3 | 3 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | Fortnite 10.0.19041.3948; XDefiant 10.0.22000.4429; Terraria 10.0.22000.4429; Trackmania 10.0.22621.1852 |
 | SHCore.dll | System32 | yes | 3 | 3 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | Fortnite 10.0.19041.3948; XDefiant 10.0.22000.4429; Terraria 10.0.22000.4429; Trackmania 10.0.22621.1852 |
@@ -1118,13 +1118,13 @@ Console-related exports of the DLLs in each title's EmbeddedXvd `Windows\System3
 | WerXboxGc.dll | System32 | no | 19 | 19 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | Fortnite 10.0.19041.3948; XDefiant 10.0.22000.4429; Terraria 10.0.22000.4429; Trackmania 10.0.22621.1852 |
 | wldp.dll | System32 | yes | 13 | 11 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 2 | 0 | 0 | 0 | 0 | 0 | Fortnite 10.0.19041.3948; XDefiant 10.0.22000.4429; Terraria 10.0.22000.4429; Trackmania 10.0.22621.1852 |
 | xapu.dll | System32 | no | 6 | 5 | 0 | 0 | 0 | 0 | 0 | 1 | 0 | 0 | 0 | 5 | 0 | 0 | 4 | Fortnite 10.0.19041.3948; XDefiant 10.0.22000.4429; Terraria 10.0.22000.4429; Trackmania 10.0.22621.1852 |
-| xbsc_xs.dll | System32 | no | 41 | 40 | 0 | 0 | 0 | 0 | 0 | 1 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | Fortnite 2020.11015.12200.10000; XDefiant 2206.2209.12105.11142; Terraria 2206.2209.12105.11142; Trackmania 2210.2210.12006.15549 |
+| xbsc_xs.dll | System32 | no | 41 | 16 | 24 | 0 | 0 | 0 | 0 | 1 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | Fortnite 2020.11015.12200.10000; XDefiant 2206.2209.12105.11142; Terraria 2206.2209.12105.11142; Trackmania 2210.2210.12006.15549 |
 | xbthunk.dll | System32 | no | 11 | 11 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | Fortnite 10.0.19041.3948; XDefiant 10.0.22000.4429; Terraria 10.0.22000.4429; Trackmania 10.0.22621.1852 |
-| xbtp.dll | System32 | no | 133 | 126 | 0 | 0 | 0 | 0 | 0 | 7 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | Fortnite 10.0.19041.3948; XDefiant 10.0.22000.4429; Terraria 10.0.22000.4429; Trackmania 10.0.22621.1852 |
+| xbtp.dll | System32 | no | 133 | 124 | 2 | 0 | 0 | 0 | 0 | 7 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | Fortnite 10.0.19041.3948; XDefiant 10.0.22000.4429; Terraria 10.0.22000.4429; Trackmania 10.0.22621.1852 |
 | xcrdapi.dll | System32 | no | 137 | 130 | 0 | 0 | 0 | 0 | 0 | 7 | 0 | 0 | 1 | 0 | 0 | 0 | 0 | Fortnite 10.0.19041.3948; XDefiant 10.0.22000.4429; Terraria 10.0.22000.4429; Trackmania 10.0.22621.1852 |
-| xdxr.dll | System32 | no | 1 | 1 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | XDefiant None; Terraria None; Trackmania None |
-| xdxr_d.dll | System32 | no | 1 | 1 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | XDefiant None; Terraria None; Trackmania None |
-| xdxr_i.dll | System32 | no | 1 | 1 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | XDefiant None; Terraria None; Trackmania None |
+| xdxr.dll | System32 | no | 1 | 0 | 1 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | XDefiant None; Terraria None; Trackmania None |
+| xdxr_d.dll | System32 | no | 1 | 0 | 1 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | XDefiant None; Terraria None; Trackmania None |
+| xdxr_i.dll | System32 | no | 1 | 0 | 1 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | XDefiant None; Terraria None; Trackmania None |
 | xfp_gc.dll | System32 | no | 8 | 8 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | Fortnite 10.0.19041.3948; XDefiant 10.0.22000.4429; Terraria 10.0.22000.4429; Trackmania 10.0.22621.1852 |
 | xfrontpaneldisplay.dll | System32 | no | 8 | 8 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 6 | 0 | 0 | Fortnite 10.0.19041.3948; XDefiant 10.0.22000.4429; Terraria 10.0.22000.4429; Trackmania 10.0.22621.1852 |
 | xg_x.dll | System32 | no | 21 | 19 | 0 | 0 | 0 | 0 | 0 | 2 | 0 | 0 | 0 | 0 | 3 | 4 | 0 | Fortnite 10.0.19041.3948; XDefiant 10.0.22000.4429; Terraria 10.0.22000.4429; Trackmania 10.0.22621.1852 |
@@ -1140,22 +1140,21 @@ Console-related exports of the DLLs in each title's EmbeddedXvd `Windows\System3
 | xmem.dll | System32 | no | 36 | 36 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 10 | 4 | 5 | 8 | 2 | Fortnite 10.0.19041.3948; XDefiant 10.0.22000.4429; Terraria 10.0.22000.4429; Trackmania 10.0.22621.1852 |
 | xpal.dll | System32 | no | 52 | 52 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | XDefiant None; Terraria None; Trackmania None |
 | xtfbaseservices.dll | System32 | no | 60 | 60 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | Fortnite 10.0.19041.3948; XDefiant 10.0.22000.4429; Terraria 10.0.22000.4429; Trackmania 10.0.22621.1852 |
-| xtfconsolecontrol.dll | System32 | no | 2 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 2 | 0 | 0 | 0 | 0 | 0 | Fortnite 10.0.19041.3948; XDefiant 10.0.22000.4429; Terraria 10.0.22000.4429; Trackmania 10.0.22621.1852 |
-| xtfdebugmonitor.dll | System32 | no | 2 | 1 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 1 | 0 | 0 | 0 | 0 | 0 | Fortnite 10.0.19041.3948; XDefiant 10.0.22000.4429; Terraria 10.0.22000.4429; Trackmania 10.0.22621.1852 |
+| xtfconsolecontrol.dll | System32 | no | 2 | 1 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 1 | 0 | 0 | 0 | 0 | 0 | Fortnite 10.0.19041.3948; XDefiant 10.0.22000.4429; Terraria 10.0.22000.4429; Trackmania 10.0.22621.1852 |
+| xtfdebugmonitor.dll | System32 | no | 2 | 2 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | Fortnite 10.0.19041.3948; XDefiant 10.0.22000.4429; Terraria 10.0.22000.4429; Trackmania 10.0.22621.1852 |
 | xtfdiaginfo.dll | System32 | no | 2 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 2 | 0 | 0 | 0 | 0 | 0 | Fortnite 10.0.19041.3948; XDefiant 10.0.22000.4429; Terraria 10.0.22000.4429; Trackmania 10.0.22621.1852 |
 | xtfeventserver.dll | System32 | no | 2 | 1 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 1 | 0 | 0 | 0 | 0 | 0 | Fortnite 10.0.19041.3948; XDefiant 10.0.22000.4429; Terraria 10.0.22000.4429; Trackmania 10.0.22621.1852 |
 | xtffileio.dll | System32 | no | 2 | 1 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 1 | 0 | 0 | 0 | 0 | 0 | Fortnite 10.0.19041.3948; XDefiant 10.0.22000.4429; Terraria 10.0.22000.4429; Trackmania 10.0.22621.1852 |
-| xtfpix.dll | System32 | no | 9 | 7 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 2 | 0 | 0 | 0 | 0 | 0 | Fortnite 10.0.19041.3948; XDefiant 10.0.22000.4429; Terraria 10.0.22000.4429; Trackmania 10.0.22621.1852 |
+| xtfpix.dll | System32 | no | 9 | 9 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | Fortnite 10.0.19041.3948; XDefiant 10.0.22000.4429; Terraria 10.0.22000.4429; Trackmania 10.0.22621.1852 |
 | xtfremoterun.dll | System32 | no | 2 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 2 | 0 | 0 | 0 | 0 | 0 | Fortnite 10.0.19041.3948; XDefiant 10.0.22000.4429; Terraria 10.0.22000.4429; Trackmania 10.0.22621.1852 |
 | XVMAudioService.dll | System32 | no | 3 | 1 | 1 | 0 | 0 | 0 | 1 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | Fortnite 10.0.19041.3948; XDefiant 10.0.22000.4429; Terraria 10.0.22000.4429; Trackmania 10.0.22621.1852 |
 
 ### Not targeted (no analysed title references them)
 
-The console-library total above (2159 exports in 110 libraries) keeps every console-only export in the denominator, including devkit, tools and OS service DLLs that no analysed title imports. 106 libraries (2153 exports) are imported by at least one title, directly or through API-set host attribution, or are emulator-provided; the 4 below (6 exports) are not targeted: no title EXE or shipped DLL imports any of their exports and the emulator does not provide them. They stay `missing` in the headline instead of being dropped from it, so the percentage is not inflated; a library moves out of this list as soon as a title imports it or an emulator crate exports it. The earlier Xbox-only figure (2082 exports) counted only DLLs with no same-named PC DLL and is kept in `summary.json` under `all_including_pc`. Coverage inside the 106 targeted libraries alone: 2070/2153.
+The console-library total above (2159 exports in 110 libraries) keeps every console-only export in the denominator, including devkit, tools and OS service DLLs that no analysed title imports. 107 libraries (2155 exports) are imported by at least one title, directly or through API-set host attribution, or are emulator-provided; the 3 below (4 exports) are not targeted: no title EXE or shipped DLL imports any of their exports and the emulator does not provide them. They stay `missing` in the headline instead of being dropped from it, so the percentage is not inflated; a library moves out of this list as soon as a title imports it or an emulator crate exports it. The earlier Xbox-only figure (2082 exports) counted only DLLs with no same-named PC DLL and is kept in `summary.json` under `all_including_pc`. Coverage inside the 107 targeted libraries alone: 2083/2155.
 
 | Library | Folder | Same-named PC DLL | Console-only exports | Present in |
 |---|---|---|---|---|
-| xtfconsolecontrol.dll | System32 | no | 2 | Fortnite, XDefiant, Terraria, Trackmania |
 | xtfremoterun.dll | System32 | no | 2 | Fortnite, XDefiant, Terraria, Trackmania |
 | ConIoSrv.dll | System32 | no | 1 | Fortnite, XDefiant, Terraria, Trackmania |
 | EventAggregation.dll | System32 | yes | 1 | Fortnite, XDefiant, Terraria, Trackmania |
@@ -1292,7 +1291,7 @@ Newer console OS builds add exports; each is its own item in the map and stays `
 |---|---|---|
 | `AddData` | XDefiant, Terraria, Trackmania | implemented |
 | `AddStreamingApiObject` | XDefiant, Terraria, Trackmania | implemented |
-| `DebugLive` | XDefiant, Terraria, Trackmania | implemented |
+| `DebugLive` | XDefiant, Terraria, Trackmania | forwarded |
 | `SaveDeveloperBlobInfo` | XDefiant, Terraria, Trackmania | implemented |
 
 </details>
@@ -1446,8 +1445,8 @@ Newer console OS builds add exports; each is its own item in the map and stays `
 
 | Function | Present in | Status |
 |---|---|---|
-| `XBSC_CreatePixDwarfApi` | XDefiant, Terraria, Trackmania | implemented |
-| `XBSC_DisassembleHwPipelineWithCallback` | XDefiant, Terraria, Trackmania | implemented |
+| `XBSC_CreatePixDwarfApi` | XDefiant, Terraria, Trackmania | forwarded |
+| `XBSC_DisassembleHwPipelineWithCallback` | XDefiant, Terraria, Trackmania | forwarded |
 
 </details>
 
@@ -1885,8 +1884,8 @@ No PC DLL is named advapi32legacy.dll; it is emulated by its compat crate, so no
 
 | Function | Status | Imported by | Present in |
 |---|---|---|---|
-| `ServiceMain` | implemented |  | Fortnite, XDefiant, Terraria, Trackmania |
 | `SvchostPushServiceGlobals` | implemented |  | Fortnite, XDefiant, Terraria, Trackmania |
+| `ServiceMain` | forwarded |  | Fortnite, XDefiant, Terraria, Trackmania |
 
 </details>
 
@@ -1924,13 +1923,13 @@ No PC DLL is named advapi32legacy.dll; it is emulated by its compat crate, so no
 
 </details>
 
-<details><summary><b>d3d12_x.dll</b>: 54 console-only exports, 46 covered</summary>
+<details><summary><b>d3d12_x.dll</b>: 54 console-only exports, 48 covered</summary>
 
 | Function | Status | Imported by | Present in |
 |---|---|---|---|
-| `D3D10CreateBlob` | implemented |  | Fortnite, XDefiant, Terraria, Trackmania |
 | `D3D12CreateDevice` | implemented |  | Fortnite, XDefiant, Terraria, Trackmania |
-| `D3D12GetDebugInterface` | implemented | Trackmania | Fortnite, XDefiant, Terraria, Trackmania |
+| `D3D12CreateRootSignatureDeserializer` | implemented |  | Fortnite, XDefiant, Terraria, Trackmania |
+| `D3D12CreateVersionedRootSignatureDeserializer` | implemented |  | Fortnite, XDefiant, Terraria, Trackmania |
 | `D3D12SerializeRootSignature` | implemented | Terraria, Trackmania | Fortnite, XDefiant, Terraria, Trackmania |
 | `D3D12SerializeVersionedRootSignature` | implemented | Trackmania | Fortnite, XDefiant, Terraria, Trackmania |
 | `D3D12XboxCreateDevice` | implemented | Terraria, Trackmania | Fortnite, XDefiant, Terraria, Trackmania |
@@ -1974,8 +1973,8 @@ No PC DLL is named advapi32legacy.dll; it is emulated by its compat crate, so no
 | `IID_IGraphicsUnknown` | implemented |  | Fortnite, XDefiant, Terraria, Trackmania |
 | `InternalDriverCallX` | implemented |  | Fortnite, XDefiant, Terraria, Trackmania |
 | `PixGetPixieEntryPoints` | implemented |  | Fortnite, XDefiant, Terraria, Trackmania |
-| `D3D12CreateRootSignatureDeserializer` | pending |  | Fortnite, XDefiant, Terraria, Trackmania |
-| `D3D12CreateVersionedRootSignatureDeserializer` | pending |  | Fortnite, XDefiant, Terraria, Trackmania |
+| `D3D10CreateBlob` | forwarded |  | Fortnite, XDefiant, Terraria, Trackmania |
+| `D3D12GetDebugInterface` | forwarded | Trackmania | Fortnite, XDefiant, Terraria, Trackmania |
 | `D3DAllocateGraphicsMemory` | stub |  | Fortnite, XDefiant, Terraria, Trackmania |
 | `D3DFreeGraphicsMemory` | stub |  | Fortnite, XDefiant, Terraria, Trackmania |
 | `DXGIXGetFrameStatistics` | stub |  | Fortnite, XDefiant, Terraria, Trackmania |
@@ -1985,20 +1984,21 @@ No PC DLL is named advapi32legacy.dll; it is emulated by its compat crate, so no
 
 </details>
 
-<details><summary><b>d3d12_xs.dll</b>: 55 console-only exports, 48 covered</summary>
+<details><summary><b>d3d12_xs.dll</b>: 55 console-only exports, 51 covered</summary>
 
 | Function | Status | Imported by | Present in |
 |---|---|---|---|
-| `D3D10CreateBlob` | implemented |  | Fortnite, XDefiant, Terraria, Trackmania |
 | `D3D12ConfigureVirtualMemoryX` | implemented | XDefiant | Fortnite, XDefiant, Terraria, Trackmania |
+| `D3D12CreateDevice` | implemented | Fortnite | Fortnite, XDefiant, Terraria, Trackmania |
 | `D3D12CreateRootSignatureDeserializer` | implemented |  | Fortnite, XDefiant, Terraria, Trackmania |
 | `D3D12CreateVersionedRootSignatureDeserializer` | implemented |  | Fortnite, XDefiant, Terraria, Trackmania |
-| `D3D12GetDebugInterface` | implemented |  | Fortnite, XDefiant, Terraria, Trackmania |
 | `D3D12SerializeRootSignature` | implemented | Fortnite, Minecraft | Fortnite, XDefiant, Terraria, Trackmania |
 | `D3D12SerializeVersionedRootSignature` | implemented | Fortnite, XDefiant | Fortnite, XDefiant, Terraria, Trackmania |
 | `D3D12UploadCustomMicrocodeX` | implemented |  | Fortnite, XDefiant, Terraria, Trackmania |
+| `D3D12XboxCreateDevice` | implemented | Fortnite, Minecraft, XDefiant | Fortnite, XDefiant, Terraria, Trackmania |
 | `D3D12XboxEnableMemoryProfiling` | implemented |  | Fortnite, XDefiant, Terraria, Trackmania |
 | `D3D12XboxGetProcessDebugFlags` | implemented |  | Fortnite, XDefiant, Terraria, Trackmania |
+| `D3D12XboxSetProcessDebugFlags` | implemented | Fortnite | Fortnite, XDefiant, Terraria, Trackmania |
 | `D3D12XboxUnloadDriverModule` | implemented |  | XDefiant, Terraria, Trackmania |
 | `D3D12ZeroMemoryX` | implemented |  | XDefiant, Terraria, Trackmania |
 | `D3DFlushEntireCpuCache` | implemented |  | Fortnite, XDefiant, Terraria, Trackmania |
@@ -2037,9 +2037,8 @@ No PC DLL is named advapi32legacy.dll; it is emulated by its compat crate, so no
 | `InternalDriverCallX` | implemented |  | Fortnite, XDefiant, Terraria, Trackmania |
 | `PixGetPixieEntryPoints` | implemented |  | Fortnite, XDefiant, Terraria, Trackmania |
 | `WKPDID_D3DDebugObjectNameW` | implemented |  | Fortnite, XDefiant, Terraria, Trackmania |
-| `D3D12CreateDevice` | pending | Fortnite | Fortnite, XDefiant, Terraria, Trackmania |
-| `D3D12XboxCreateDevice` | pending | Fortnite, Minecraft, XDefiant | Fortnite, XDefiant, Terraria, Trackmania |
-| `D3D12XboxSetProcessDebugFlags` | pending | Fortnite | Fortnite, XDefiant, Terraria, Trackmania |
+| `D3D10CreateBlob` | forwarded |  | Fortnite, XDefiant, Terraria, Trackmania |
+| `D3D12GetDebugInterface` | forwarded |  | Fortnite, XDefiant, Terraria, Trackmania |
 | `DXGIXGetFrameStatistics` | stub |  | Fortnite, XDefiant, Terraria, Trackmania |
 | `DXGIXPresentArray` | stub |  | Fortnite, XDefiant, Terraria, Trackmania |
 | `DXGIXSetFrameNotification` | stub |  | Fortnite, XDefiant, Terraria, Trackmania |
@@ -2068,7 +2067,7 @@ No PC DLL is named advapi32legacy.dll; it is emulated by its compat crate, so no
 
 | Function | Status | Imported by | Present in |
 |---|---|---|---|
-| `SCDxil_ConvertDxbcToDxil` | implemented |  | Fortnite, XDefiant, Terraria, Trackmania |
+| `SCDxil_ConvertDxbcToDxil` | forwarded |  | Fortnite, XDefiant, Terraria, Trackmania |
 
 </details>
 
@@ -2076,8 +2075,8 @@ No PC DLL is named advapi32legacy.dll; it is emulated by its compat crate, so no
 
 | Function | Status | Imported by | Present in |
 |---|---|---|---|
-| `DxcCreateInstance` | implemented | Trackmania | Fortnite, XDefiant, Terraria, Trackmania |
-| `DxcCreateInstance2` | implemented |  | Fortnite, XDefiant, Terraria, Trackmania |
+| `DxcCreateInstance` | forwarded | Trackmania | Fortnite, XDefiant, Terraria, Trackmania |
+| `DxcCreateInstance2` | forwarded |  | Fortnite, XDefiant, Terraria, Trackmania |
 
 </details>
 
@@ -2113,9 +2112,9 @@ No PC DLL is named advapi32legacy.dll; it is emulated by its compat crate, so no
 
 | Function | Status | Imported by | Present in |
 |---|---|---|---|
-| `DllCanUnloadNow` | implemented |  | Fortnite, XDefiant, Terraria, Trackmania |
 | `DllGetActivationFactory` | implemented |  | Fortnite, XDefiant, Terraria, Trackmania |
-| `DllGetClassObject` | missing |  | Fortnite, XDefiant, Terraria, Trackmania |
+| `DllCanUnloadNow` | forwarded |  | Fortnite, XDefiant, Terraria, Trackmania |
+| `DllGetClassObject` | pending |  | Fortnite, XDefiant, Terraria, Trackmania |
 
 </details>
 
@@ -2670,12 +2669,12 @@ No PC DLL is named advapi32legacy.dll; it is emulated by its compat crate, so no
 |---|---|---|---|
 | `AddData` | implemented |  | XDefiant, Terraria, Trackmania |
 | `AddStreamingApiObject` | implemented |  | XDefiant, Terraria, Trackmania |
-| `CollectHangSummary` | implemented |  | Fortnite, XDefiant, Terraria, Trackmania |
-| `DebugLive` | implemented |  | XDefiant, Terraria, Trackmania |
-| `InitializeHix` | implemented |  | Fortnite, XDefiant, Terraria, Trackmania |
 | `SaveDeveloperBlobInfo` | implemented |  | XDefiant, Terraria, Trackmania |
-| `TerminateHix` | implemented |  | Fortnite, XDefiant, Terraria, Trackmania |
-| `WriteHangDump` | implemented |  | Fortnite, XDefiant, Terraria, Trackmania |
+| `CollectHangSummary` | forwarded |  | Fortnite, XDefiant, Terraria, Trackmania |
+| `DebugLive` | forwarded |  | XDefiant, Terraria, Trackmania |
+| `InitializeHix` | forwarded |  | Fortnite, XDefiant, Terraria, Trackmania |
+| `TerminateHix` | forwarded |  | Fortnite, XDefiant, Terraria, Trackmania |
+| `WriteHangDump` | forwarded |  | Fortnite, XDefiant, Terraria, Trackmania |
 
 </details>
 
@@ -3023,11 +3022,11 @@ No PC DLL is named kernel32legacy.dll; it is emulated by its compat crate, so no
 
 | Function | Status | Imported by | Present in |
 |---|---|---|---|
-| `CreateMergedTraceFile` | implemented |  | Fortnite, XDefiant, Terraria, Trackmania |
 | `DllCanUnloadNow` | implemented |  | Fortnite, XDefiant, Terraria, Trackmania |
 | `StartHeapTrace` | implemented |  | Fortnite, XDefiant, Terraria, Trackmania |
 | `StartKernelTrace` | implemented |  | Fortnite, XDefiant, Terraria, Trackmania |
 | `UpdateHeapTrace` | implemented |  | Fortnite, XDefiant, Terraria, Trackmania |
+| `CreateMergedTraceFile` | forwarded |  | Fortnite, XDefiant, Terraria, Trackmania |
 
 </details>
 
@@ -3056,7 +3055,7 @@ No PC DLL is named kernel32legacy.dll; it is emulated by its compat crate, so no
 | Function | Status | Imported by | Present in |
 |---|---|---|---|
 | `DllMain` | implemented |  | Fortnite, XDefiant, Terraria, Trackmania |
-| `MFDllGetClassObject` | implemented |  | Fortnite, XDefiant, Terraria, Trackmania |
+| `MFDllGetClassObject` | forwarded |  | Fortnite, XDefiant, Terraria, Trackmania |
 
 </details>
 
@@ -3122,7 +3121,7 @@ No PC DLL is named minappmodelx.dll; it is emulated by its compat crate, so no r
 
 </details>
 
-<details><summary><b>minuserx.dll</b>: 74 console-only exports, 70 covered</summary>
+<details><summary><b>minuserx.dll</b>: 74 console-only exports, 74 covered</summary>
 
 No PC DLL is named minuserx.dll; it is emulated by its compat crate, so no row is a PC-twin name match: every status comes from the crate's exports.txt.
 
@@ -3139,6 +3138,8 @@ No PC DLL is named minuserx.dll; it is emulated by its compat crate, so no row i
 | `GetMessagePos` | implemented |  | Fortnite, XDefiant, Terraria, Trackmania |
 | `GetMessageTime` | implemented |  | Fortnite, XDefiant, Terraria, Trackmania |
 | `GetMessageW` | implemented |  | Fortnite, XDefiant, Terraria, Trackmania |
+| `GetWindowLongPtrA` | implemented | XDefiant | Fortnite, XDefiant, Terraria, Trackmania |
+| `GetWindowLongPtrW` | implemented | Minecraft | Fortnite, XDefiant, Terraria, Trackmania |
 | `InSendMessage` | implemented |  | Fortnite, XDefiant, Terraria, Trackmania |
 | `InSendMessageEx` | implemented |  | Fortnite, XDefiant, Terraria, Trackmania |
 | `MinUserXP_GetHooks` | implemented |  | Fortnite, XDefiant, Terraria, Trackmania |
@@ -3159,6 +3160,8 @@ No PC DLL is named minuserx.dll; it is emulated by its compat crate, so no row i
 | `SendNotifyMessageW` | implemented |  | Fortnite, XDefiant, Terraria, Trackmania |
 | `SetCursorPos` | implemented |  | Fortnite, XDefiant, Terraria, Trackmania |
 | `SetMessageExtraInfo` | implemented |  | Fortnite, XDefiant, Terraria, Trackmania |
+| `SetWindowLongPtrA` | implemented | XDefiant | Fortnite, XDefiant, Terraria, Trackmania |
+| `SetWindowLongPtrW` | implemented | Minecraft, Terraria | Fortnite, XDefiant, Terraria, Trackmania |
 | `WaitMessage` | implemented |  | Fortnite, XDefiant, Terraria, Trackmania |
 | `AdjustWindowRect` | forwarded |  | Fortnite, XDefiant, Terraria, Trackmania |
 | `AdjustWindowRectEx` | forwarded |  | Fortnite, XDefiant, Terraria, Trackmania |
@@ -3198,10 +3201,6 @@ No PC DLL is named minuserx.dll; it is emulated by its compat crate, so no row i
 | `TranslateMessage` | forwarded | Fortnite, Minecraft, Terraria, Trackmania, XDefiant | Fortnite, XDefiant, Terraria, Trackmania |
 | `UnregisterClassA` | forwarded |  | Fortnite, XDefiant, Terraria, Trackmania |
 | `UnregisterClassW` | forwarded | Trackmania | Fortnite, XDefiant, Terraria, Trackmania |
-| `GetWindowLongPtrA` | pending | XDefiant | Fortnite, XDefiant, Terraria, Trackmania |
-| `GetWindowLongPtrW` | pending | Minecraft | Fortnite, XDefiant, Terraria, Trackmania |
-| `SetWindowLongPtrA` | pending | XDefiant | Fortnite, XDefiant, Terraria, Trackmania |
-| `SetWindowLongPtrW` | pending | Minecraft, Terraria | Fortnite, XDefiant, Terraria, Trackmania |
 
 </details>
 
@@ -3250,11 +3249,11 @@ No PC DLL is named minuserx.dll; it is emulated by its compat crate, so no row i
 
 | Function | Status | Imported by | Present in |
 |---|---|---|---|
-| `NB_CompilePipeline` | implemented |  | Fortnite, XDefiant, Terraria, Trackmania |
-| `NB_CompileShader` | implemented |  | Fortnite, XDefiant, Terraria, Trackmania |
-| `NB_CreateOptimizer` | implemented |  | Fortnite, XDefiant, Terraria, Trackmania |
-| `NB_CreatePixDwarfApi` | implemented |  | Fortnite, XDefiant, Terraria, Trackmania |
-| `NB_GetShaderStats` | implemented |  | Fortnite, XDefiant, Terraria, Trackmania |
+| `NB_CompilePipeline` | forwarded |  | Fortnite, XDefiant, Terraria, Trackmania |
+| `NB_CompileShader` | forwarded |  | Fortnite, XDefiant, Terraria, Trackmania |
+| `NB_CreateOptimizer` | forwarded |  | Fortnite, XDefiant, Terraria, Trackmania |
+| `NB_CreatePixDwarfApi` | forwarded |  | Fortnite, XDefiant, Terraria, Trackmania |
+| `NB_GetShaderStats` | forwarded |  | Fortnite, XDefiant, Terraria, Trackmania |
 
 </details>
 
@@ -3262,12 +3261,12 @@ No PC DLL is named minuserx.dll; it is emulated by its compat crate, so no row i
 
 | Function | Status | Imported by | Present in |
 |---|---|---|---|
-| `NB_CompilePipeline` | implemented |  | Fortnite, XDefiant, Terraria, Trackmania |
-| `NB_CompileShader` | implemented |  | Fortnite, XDefiant, Terraria, Trackmania |
-| `NB_CreateOptimizer` | implemented |  | Fortnite, XDefiant, Terraria, Trackmania |
-| `NB_CreatePixDwarfApi` | implemented |  | Fortnite, XDefiant, Terraria, Trackmania |
-| `NB_GetRegPressure` | implemented |  | Fortnite, XDefiant, Terraria, Trackmania |
-| `NB_GetShaderStats` | implemented |  | Fortnite, XDefiant, Terraria, Trackmania |
+| `NB_CompilePipeline` | forwarded |  | Fortnite, XDefiant, Terraria, Trackmania |
+| `NB_CompileShader` | forwarded |  | Fortnite, XDefiant, Terraria, Trackmania |
+| `NB_CreateOptimizer` | forwarded |  | Fortnite, XDefiant, Terraria, Trackmania |
+| `NB_CreatePixDwarfApi` | forwarded |  | Fortnite, XDefiant, Terraria, Trackmania |
+| `NB_GetRegPressure` | forwarded |  | Fortnite, XDefiant, Terraria, Trackmania |
+| `NB_GetShaderStats` | forwarded |  | Fortnite, XDefiant, Terraria, Trackmania |
 
 </details>
 
@@ -3374,56 +3373,13 @@ No PC DLL is named minuserx.dll; it is emulated by its compat crate, so no row i
 
 | Function | Status | Imported by | Present in |
 |---|---|---|---|
-| `OG_ApplyCompactOptionSetToSIS` | implemented |  | Fortnite, XDefiant, Terraria, Trackmania |
-| `OG_ApplyOptionSetToSIS` | implemented |  | Fortnite, XDefiant, Terraria, Trackmania |
-| `OG_ApplySISToCompactOptionSet` | implemented |  | Fortnite, XDefiant, Terraria, Trackmania |
-| `OG_GetBestOption` | implemented |  | Fortnite, XDefiant, Terraria, Trackmania |
 | `OG_GetCompactOptionSet` | implemented |  | Fortnite, XDefiant, Terraria, Trackmania |
-| `OG_GetNextOptionSet` | implemented |  | Fortnite, XDefiant, Terraria, Trackmania |
-| `OG_GetOptionPerf` | implemented |  | Fortnite, XDefiant, Terraria, Trackmania |
-| `OG_GetOptionSetID` | implemented |  | Fortnite, XDefiant, Terraria, Trackmania |
-| `OG_GetSerializedCompactOptionSet` | implemented |  | Fortnite, XDefiant, Terraria, Trackmania |
-| `OG_GetSerializedOptionSet` | implemented |  | Fortnite, XDefiant, Terraria, Trackmania |
-| `OG_InitOptionGenerator` | implemented |  | Fortnite, XDefiant, Terraria, Trackmania |
-| `OG_OptionGeneratorDestroy` | implemented |  | Fortnite, XDefiant, Terraria, Trackmania |
-| `OG_SetOptionPerf` | implemented |  | Fortnite, XDefiant, Terraria, Trackmania |
 | `SC_AssembleHandle_Destroy` | implemented |  | Fortnite, XDefiant, Terraria, Trackmania |
-| `SC_CBUsageHandle_Destroy` | implemented |  | Fortnite, XDefiant, Terraria, Trackmania |
-| `SC_CompressExtent` | implemented |  | Fortnite, XDefiant, Terraria, Trackmania |
-| `SC_CompressExtent_Destroy` | implemented |  | Fortnite, XDefiant, Terraria, Trackmania |
-| `SC_ConvertRootSignatureToSCInputs` | implemented |  | Fortnite, XDefiant, Terraria, Trackmania |
-| `SC_DebugMapHandle_Destroy` | implemented |  | Fortnite, XDefiant, Terraria, Trackmania |
 | `SC_DebugMapHandle_GetMap` | implemented |  | Fortnite, XDefiant, Terraria, Trackmania |
-| `SC_DXBC_GetExternalILInterface` | implemented |  | Fortnite, XDefiant, Terraria, Trackmania |
-| `SC_GetOriginalShaderOffsetInBytes` | implemented |  | Fortnite, XDefiant, Terraria, Trackmania |
-| `SC_GetShaderStatsFromDXBC` | implemented |  | Fortnite, XDefiant, Terraria, Trackmania |
-| `SC_IdMap_Release` | implemented |  | Fortnite, XDefiant, Terraria, Trackmania |
-| `SC_IdMapHandle_Destroy` | implemented |  | Fortnite, XDefiant, Terraria, Trackmania |
-| `SC_IdMapHandle_GetIdMap` | implemented |  | Fortnite, XDefiant, Terraria, Trackmania |
-| `SC_InstantiateTypedVIHFromDXBC` | implemented |  | Fortnite, XDefiant, Terraria, Trackmania |
-| `SC_InstantiateVIHFromDXBC` | implemented |  | Fortnite, XDefiant, Terraria, Trackmania |
 | `SC_MetadataHandle_Destroy` | implemented |  | Fortnite, XDefiant, Terraria, Trackmania |
-| `SC_OutputHandle_CreateFromExtent` | implemented |  | Fortnite, XDefiant, Terraria, Trackmania |
-| `SC_OutputHandle_CreateFromShaderObject` | implemented |  | Fortnite, XDefiant, Terraria, Trackmania |
-| `SC_OutputHandle_Destroy` | implemented |  | Fortnite, XDefiant, Terraria, Trackmania |
-| `SC_OutputHandle_GetSerializedObjectExtent` | implemented |  | Fortnite, XDefiant, Terraria, Trackmania |
-| `SC_OutputHandle_GetShaderObject` | implemented |  | Fortnite, XDefiant, Terraria, Trackmania |
-| `SC_OutputHandle_ReleaseSerializedObjectExtent` | implemented |  | Fortnite, XDefiant, Terraria, Trackmania |
-| `SC_RegisterLifetimeHandle_Destroy` | implemented |  | Fortnite, XDefiant, Terraria, Trackmania |
 | `SC_RegisterLifetimeHandle_GetMap` | implemented |  | Fortnite, XDefiant, Terraria, Trackmania |
-| `SC_SCDX12TableDesc_Destroy` | implemented |  | Fortnite, XDefiant, Terraria, Trackmania |
-| `SC_VIH_CloseVIH` | implemented |  | Fortnite, XDefiant, Terraria, Trackmania |
-| `SC_VIH_GetCompileSettings` | implemented |  | Fortnite, XDefiant, Terraria, Trackmania |
-| `SC_VIH_GetNamedFlags` | implemented |  | Fortnite, XDefiant, Terraria, Trackmania |
-| `SC_VIH_GetOutputStats` | implemented |  | Fortnite, XDefiant, Terraria, Trackmania |
-| `SC_VIH_GetPDBName` | implemented |  | Fortnite, XDefiant, Terraria, Trackmania |
-| `SC_VIH_GetPDBNameLengthInBytes` | implemented |  | Fortnite, XDefiant, Terraria, Trackmania |
-| `SC_VIH_GetUniqueHash` | implemented |  | Fortnite, XDefiant, Terraria, Trackmania |
 | `SCCheckCompatibility` | implemented |  | Fortnite, XDefiant, Terraria, Trackmania |
-| `SCCompileShader` | implemented |  | Fortnite, XDefiant, Terraria, Trackmania |
 | `SCCompileShaderPair` | implemented |  | Fortnite, XDefiant, Terraria, Trackmania |
-| `SCCreate` | implemented |  | Fortnite, XDefiant, Terraria, Trackmania |
-| `SCDestroy` | implemented |  | Fortnite, XDefiant, Terraria, Trackmania |
 | `SCDumpHwShader` | implemented |  | Fortnite, XDefiant, Terraria, Trackmania |
 | `SCDumpHwShaderData` | implemented |  | Fortnite, XDefiant, Terraria, Trackmania |
 | `SCDumpHwShaderRaw` | implemented |  | Fortnite, XDefiant, Terraria, Trackmania |
@@ -3436,8 +3392,51 @@ No PC DLL is named minuserx.dll; it is emulated by its compat crate, so no row i
 | `SCGetSCOption` | implemented |  | Fortnite, XDefiant, Terraria, Trackmania |
 | `SCMergeShaderPair` | implemented |  | Fortnite, XDefiant, Terraria, Trackmania |
 | `SCSetSCOption` | implemented |  | Fortnite, XDefiant, Terraria, Trackmania |
-| `SCSimpleCompileShader` | implemented |  | Fortnite, XDefiant, Terraria, Trackmania |
-| `SCSimpleDumpShader` | implemented |  | Fortnite, XDefiant, Terraria, Trackmania |
+| `OG_ApplyCompactOptionSetToSIS` | forwarded |  | Fortnite, XDefiant, Terraria, Trackmania |
+| `OG_ApplyOptionSetToSIS` | forwarded |  | Fortnite, XDefiant, Terraria, Trackmania |
+| `OG_ApplySISToCompactOptionSet` | forwarded |  | Fortnite, XDefiant, Terraria, Trackmania |
+| `OG_GetBestOption` | forwarded |  | Fortnite, XDefiant, Terraria, Trackmania |
+| `OG_GetNextOptionSet` | forwarded |  | Fortnite, XDefiant, Terraria, Trackmania |
+| `OG_GetOptionPerf` | forwarded |  | Fortnite, XDefiant, Terraria, Trackmania |
+| `OG_GetOptionSetID` | forwarded |  | Fortnite, XDefiant, Terraria, Trackmania |
+| `OG_GetSerializedCompactOptionSet` | forwarded |  | Fortnite, XDefiant, Terraria, Trackmania |
+| `OG_GetSerializedOptionSet` | forwarded |  | Fortnite, XDefiant, Terraria, Trackmania |
+| `OG_InitOptionGenerator` | forwarded |  | Fortnite, XDefiant, Terraria, Trackmania |
+| `OG_OptionGeneratorDestroy` | forwarded |  | Fortnite, XDefiant, Terraria, Trackmania |
+| `OG_SetOptionPerf` | forwarded |  | Fortnite, XDefiant, Terraria, Trackmania |
+| `SC_CBUsageHandle_Destroy` | forwarded |  | Fortnite, XDefiant, Terraria, Trackmania |
+| `SC_CompressExtent` | forwarded |  | Fortnite, XDefiant, Terraria, Trackmania |
+| `SC_CompressExtent_Destroy` | forwarded |  | Fortnite, XDefiant, Terraria, Trackmania |
+| `SC_ConvertRootSignatureToSCInputs` | forwarded |  | Fortnite, XDefiant, Terraria, Trackmania |
+| `SC_DebugMapHandle_Destroy` | forwarded |  | Fortnite, XDefiant, Terraria, Trackmania |
+| `SC_DXBC_GetExternalILInterface` | forwarded |  | Fortnite, XDefiant, Terraria, Trackmania |
+| `SC_GetOriginalShaderOffsetInBytes` | forwarded |  | Fortnite, XDefiant, Terraria, Trackmania |
+| `SC_GetShaderStatsFromDXBC` | forwarded |  | Fortnite, XDefiant, Terraria, Trackmania |
+| `SC_IdMap_Release` | forwarded |  | Fortnite, XDefiant, Terraria, Trackmania |
+| `SC_IdMapHandle_Destroy` | forwarded |  | Fortnite, XDefiant, Terraria, Trackmania |
+| `SC_IdMapHandle_GetIdMap` | forwarded |  | Fortnite, XDefiant, Terraria, Trackmania |
+| `SC_InstantiateTypedVIHFromDXBC` | forwarded |  | Fortnite, XDefiant, Terraria, Trackmania |
+| `SC_InstantiateVIHFromDXBC` | forwarded |  | Fortnite, XDefiant, Terraria, Trackmania |
+| `SC_OutputHandle_CreateFromExtent` | forwarded |  | Fortnite, XDefiant, Terraria, Trackmania |
+| `SC_OutputHandle_CreateFromShaderObject` | forwarded |  | Fortnite, XDefiant, Terraria, Trackmania |
+| `SC_OutputHandle_Destroy` | forwarded |  | Fortnite, XDefiant, Terraria, Trackmania |
+| `SC_OutputHandle_GetSerializedObjectExtent` | forwarded |  | Fortnite, XDefiant, Terraria, Trackmania |
+| `SC_OutputHandle_GetShaderObject` | forwarded |  | Fortnite, XDefiant, Terraria, Trackmania |
+| `SC_OutputHandle_ReleaseSerializedObjectExtent` | forwarded |  | Fortnite, XDefiant, Terraria, Trackmania |
+| `SC_RegisterLifetimeHandle_Destroy` | forwarded |  | Fortnite, XDefiant, Terraria, Trackmania |
+| `SC_SCDX12TableDesc_Destroy` | forwarded |  | Fortnite, XDefiant, Terraria, Trackmania |
+| `SC_VIH_CloseVIH` | forwarded |  | Fortnite, XDefiant, Terraria, Trackmania |
+| `SC_VIH_GetCompileSettings` | forwarded |  | Fortnite, XDefiant, Terraria, Trackmania |
+| `SC_VIH_GetNamedFlags` | forwarded |  | Fortnite, XDefiant, Terraria, Trackmania |
+| `SC_VIH_GetOutputStats` | forwarded |  | Fortnite, XDefiant, Terraria, Trackmania |
+| `SC_VIH_GetPDBName` | forwarded |  | Fortnite, XDefiant, Terraria, Trackmania |
+| `SC_VIH_GetPDBNameLengthInBytes` | forwarded |  | Fortnite, XDefiant, Terraria, Trackmania |
+| `SC_VIH_GetUniqueHash` | forwarded |  | Fortnite, XDefiant, Terraria, Trackmania |
+| `SCCompileShader` | forwarded |  | Fortnite, XDefiant, Terraria, Trackmania |
+| `SCCreate` | forwarded |  | Fortnite, XDefiant, Terraria, Trackmania |
+| `SCDestroy` | forwarded |  | Fortnite, XDefiant, Terraria, Trackmania |
+| `SCSimpleCompileShader` | forwarded |  | Fortnite, XDefiant, Terraria, Trackmania |
+| `SCSimpleDumpShader` | forwarded |  | Fortnite, XDefiant, Terraria, Trackmania |
 | `SC_Assemble` | stub |  | Fortnite, XDefiant, Terraria, Trackmania |
 | `SC_AssembleHandle_GetShader` | stub |  | Fortnite, XDefiant, Terraria, Trackmania |
 | `SC_CompileShaderFromMetadata` | stub |  | Fortnite, XDefiant, Terraria, Trackmania |
@@ -3448,13 +3447,13 @@ No PC DLL is named minuserx.dll; it is emulated by its compat crate, so no row i
 
 | Function | Status | Imported by | Present in |
 |---|---|---|---|
-| `SCDxil_DxcCreateInstance` | implemented |  | Fortnite, XDefiant, Terraria, Trackmania |
 | `SCDxil_GetDriverShaderCode` | implemented |  | Fortnite, XDefiant, Terraria, Trackmania |
-| `SCDxil_GetExternalILInterface` | implemented |  | Fortnite, XDefiant, Terraria, Trackmania |
 | `SCDxil_GetOriginalShader` | implemented |  | Fortnite, XDefiant, Terraria, Trackmania |
 | `SCDxil_IsDxilShader` | implemented |  | Fortnite, XDefiant, Terraria, Trackmania |
 | `SCDxil_IsStageSupportedByNewBE` | implemented |  | Fortnite, XDefiant, Terraria, Trackmania |
-| `SCDxil_SCSimpleCompileShader` | implemented |  | Fortnite, XDefiant, Terraria, Trackmania |
+| `SCDxil_DxcCreateInstance` | forwarded |  | Fortnite, XDefiant, Terraria, Trackmania |
+| `SCDxil_GetExternalILInterface` | forwarded |  | Fortnite, XDefiant, Terraria, Trackmania |
+| `SCDxil_SCSimpleCompileShader` | forwarded |  | Fortnite, XDefiant, Terraria, Trackmania |
 
 </details>
 
@@ -3641,28 +3640,10 @@ No PC DLL is named minuserx.dll; it is emulated by its compat crate, so no row i
 
 | Function | Status | Imported by | Present in |
 |---|---|---|---|
-| `SC_ConvertRootSignatureToSCInputs` | implemented |  | Fortnite, XDefiant, Terraria, Trackmania |
-| `SC_OutputHandle_GetShaderObject` | implemented |  | Fortnite, XDefiant, Terraria, Trackmania |
-| `SC_SCDX12TableDesc_Destroy` | implemented |  | Fortnite, XDefiant, Terraria, Trackmania |
-| `SCCompileMultiShadersXbox` | implemented |  | Fortnite, XDefiant, Terraria, Trackmania |
-| `SCDumpHwShader` | implemented |  | Fortnite, XDefiant, Terraria, Trackmania |
-| `SCDumpHwShaderData` | implemented |  | Fortnite, XDefiant, Terraria, Trackmania |
-| `SCDumpMergedHwShader` | implemented |  | Fortnite, XDefiant, Terraria, Trackmania |
-| `SCDumpMergedHwShaderData` | implemented |  | Fortnite, XDefiant, Terraria, Trackmania |
-| `SCDumpRawShader` | implemented |  | Fortnite, XDefiant, Terraria, Trackmania |
 | `XBSC_AssembleShader` | implemented |  | Fortnite, XDefiant, Terraria, Trackmania |
-| `XBSC_CompileRootSignature` | implemented |  | Fortnite, XDefiant, Terraria, Trackmania |
 | `XBSC_CompressBuffer` | implemented |  | Fortnite, XDefiant, Terraria, Trackmania |
-| `XBSC_CreatePixDwarfApi` | implemented |  | XDefiant, Terraria, Trackmania |
 | `XBSC_DecompressBuffer` | implemented |  | Fortnite, XDefiant, Terraria, Trackmania |
-| `XBSC_DeserializePipelineCompileOutput` | implemented |  | Fortnite, XDefiant, Terraria, Trackmania |
-| `XBSC_DeserializeSrcPipeline` | implemented |  | Fortnite, XDefiant, Terraria, Trackmania |
 | `XBSC_DestroyResult` | implemented |  | Fortnite, XDefiant, Terraria, Trackmania |
-| `XBSC_DisassembleHwPipeline` | implemented |  | Fortnite, XDefiant, Terraria, Trackmania |
-| `XBSC_DisassembleHwPipelineWithCallback` | implemented |  | XDefiant, Terraria, Trackmania |
-| `XBSC_DisassembleRawShader` | implemented |  | Fortnite, XDefiant, Terraria, Trackmania |
-| `XBSC_DumpProgramShaderStats` | implemented |  | Fortnite, XDefiant, Terraria, Trackmania |
-| `XBSC_DumpShaderStats` | implemented |  | Fortnite, XDefiant, Terraria, Trackmania |
 | `XBSC_GetAssembledShader` | implemented |  | Fortnite, XDefiant, Terraria, Trackmania |
 | `XBSC_GetCompiledRootSignature` | implemented |  | Fortnite, XDefiant, Terraria, Trackmania |
 | `XBSC_GetCompressedBuffer` | implemented |  | Fortnite, XDefiant, Terraria, Trackmania |
@@ -3672,15 +3653,33 @@ No PC DLL is named minuserx.dll; it is emulated by its compat crate, so no row i
 | `XBSC_GetDisassembly` | implemented |  | Fortnite, XDefiant, Terraria, Trackmania |
 | `XBSC_GetErrorMessage` | implemented |  | Fortnite, XDefiant, Terraria, Trackmania |
 | `XBSC_GetPipelineCompileOutput` | implemented |  | Fortnite, XDefiant, Terraria, Trackmania |
-| `XBSC_GetRegPressure` | implemented |  | Fortnite, XDefiant, Terraria, Trackmania |
 | `XBSC_GetResultCode` | implemented |  | Fortnite, XDefiant, Terraria, Trackmania |
 | `XBSC_GetSerializedPipelineCompileOutput` | implemented |  | Fortnite, XDefiant, Terraria, Trackmania |
 | `XBSC_GetSerializedSrcPipeline` | implemented |  | Fortnite, XDefiant, Terraria, Trackmania |
-| `XBSC_GetShaderStats` | implemented |  | Fortnite, XDefiant, Terraria, Trackmania |
-| `XBSC_PipelineCompile` | implemented |  | Fortnite, XDefiant, Terraria, Trackmania |
-| `XBSC_SerializePipelineCompileInput` | implemented |  | Fortnite, XDefiant, Terraria, Trackmania |
-| `XBSC_SerializePipelineCompileOutput` | implemented |  | Fortnite, XDefiant, Terraria, Trackmania |
-| `XBSC_SerializeSrcPipeline` | implemented |  | Fortnite, XDefiant, Terraria, Trackmania |
+| `SC_ConvertRootSignatureToSCInputs` | forwarded |  | Fortnite, XDefiant, Terraria, Trackmania |
+| `SC_OutputHandle_GetShaderObject` | forwarded |  | Fortnite, XDefiant, Terraria, Trackmania |
+| `SC_SCDX12TableDesc_Destroy` | forwarded |  | Fortnite, XDefiant, Terraria, Trackmania |
+| `SCCompileMultiShadersXbox` | forwarded |  | Fortnite, XDefiant, Terraria, Trackmania |
+| `SCDumpHwShader` | forwarded |  | Fortnite, XDefiant, Terraria, Trackmania |
+| `SCDumpHwShaderData` | forwarded |  | Fortnite, XDefiant, Terraria, Trackmania |
+| `SCDumpMergedHwShader` | forwarded |  | Fortnite, XDefiant, Terraria, Trackmania |
+| `SCDumpMergedHwShaderData` | forwarded |  | Fortnite, XDefiant, Terraria, Trackmania |
+| `SCDumpRawShader` | forwarded |  | Fortnite, XDefiant, Terraria, Trackmania |
+| `XBSC_CompileRootSignature` | forwarded |  | Fortnite, XDefiant, Terraria, Trackmania |
+| `XBSC_CreatePixDwarfApi` | forwarded |  | XDefiant, Terraria, Trackmania |
+| `XBSC_DeserializePipelineCompileOutput` | forwarded |  | Fortnite, XDefiant, Terraria, Trackmania |
+| `XBSC_DeserializeSrcPipeline` | forwarded |  | Fortnite, XDefiant, Terraria, Trackmania |
+| `XBSC_DisassembleHwPipeline` | forwarded |  | Fortnite, XDefiant, Terraria, Trackmania |
+| `XBSC_DisassembleHwPipelineWithCallback` | forwarded |  | XDefiant, Terraria, Trackmania |
+| `XBSC_DisassembleRawShader` | forwarded |  | Fortnite, XDefiant, Terraria, Trackmania |
+| `XBSC_DumpProgramShaderStats` | forwarded |  | Fortnite, XDefiant, Terraria, Trackmania |
+| `XBSC_DumpShaderStats` | forwarded |  | Fortnite, XDefiant, Terraria, Trackmania |
+| `XBSC_GetRegPressure` | forwarded |  | Fortnite, XDefiant, Terraria, Trackmania |
+| `XBSC_GetShaderStats` | forwarded |  | Fortnite, XDefiant, Terraria, Trackmania |
+| `XBSC_PipelineCompile` | forwarded |  | Fortnite, XDefiant, Terraria, Trackmania |
+| `XBSC_SerializePipelineCompileInput` | forwarded |  | Fortnite, XDefiant, Terraria, Trackmania |
+| `XBSC_SerializePipelineCompileOutput` | forwarded |  | Fortnite, XDefiant, Terraria, Trackmania |
+| `XBSC_SerializeSrcPipeline` | forwarded |  | Fortnite, XDefiant, Terraria, Trackmania |
 | `XBSC_DeserializePipelineCompileInput` | stub |  | Fortnite, XDefiant, Terraria, Trackmania |
 
 </details>
@@ -3745,8 +3744,6 @@ No PC DLL is named minuserx.dll; it is emulated by its compat crate, so no row i
 | `?InitializeServer@TcpConnection@@SAJKPEAV?$shared_ptr@VTcpConnection@@@std@@@Z` | implemented |  | Fortnite, XDefiant, Terraria, Trackmania |
 | `?InternalLog@@YAXGPEBDPEAD@Z` | implemented |  | Fortnite, XDefiant, Terraria, Trackmania |
 | `?IsExtensionValid@XbtpExtensionRegistry@@QEAA_NAEBU_GUID@@@Z` | implemented |  | Fortnite, XDefiant, Terraria, Trackmania |
-| `?KdDbgPrint@@YAXPEBD0ZZ` | implemented |  | Fortnite, XDefiant, Terraria, Trackmania |
-| `?KdDbgPrintV@@YAXPEBD0PEAD@Z` | implemented |  | Fortnite, XDefiant, Terraria, Trackmania |
 | `?LogError@@YAXPEBDZZ` | implemented |  | Fortnite, XDefiant, Terraria, Trackmania |
 | `?LogErrorV@@YAXPEBDPEAD@Z` | implemented |  | Fortnite, XDefiant, Terraria, Trackmania |
 | `?LogInfo@@YAXPEBDZZ` | implemented |  | Fortnite, XDefiant, Terraria, Trackmania |
@@ -3833,6 +3830,8 @@ No PC DLL is named minuserx.dll; it is emulated by its compat crate, so no row i
 | `XbtpStartDispatcher` | implemented |  | Fortnite, XDefiant, Terraria, Trackmania |
 | `XbtpStartDispatcherEx` | implemented |  | Fortnite, XDefiant, Terraria, Trackmania |
 | `XbtpWaitSystemReady` | implemented |  | Fortnite, XDefiant, Terraria, Trackmania |
+| `?KdDbgPrint@@YAXPEBD0ZZ` | forwarded |  | Fortnite, XDefiant, Terraria, Trackmania |
+| `?KdDbgPrintV@@YAXPEBD0PEAD@Z` | forwarded |  | Fortnite, XDefiant, Terraria, Trackmania |
 | `?XbtpOpenXtcSession@@YAJ_KAEBU_GUID@@1PEAPEAX@Z` | stub |  | Fortnite, XDefiant, Terraria, Trackmania |
 | `XbtpLinkGetServiceLocation` | stub |  | Fortnite, XDefiant, Terraria, Trackmania |
 | `XbtpLinkGetServiceVersion` | stub |  | Fortnite, XDefiant, Terraria, Trackmania |
@@ -3991,7 +3990,7 @@ No PC DLL is named minuserx.dll; it is emulated by its compat crate, so no row i
 
 | Function | Status | Imported by | Present in |
 |---|---|---|---|
-| `XDXRCreateDevice` | implemented |  | XDefiant, Terraria, Trackmania |
+| `XDXRCreateDevice` | forwarded |  | XDefiant, Terraria, Trackmania |
 
 </details>
 
@@ -3999,7 +3998,7 @@ No PC DLL is named minuserx.dll; it is emulated by its compat crate, so no row i
 
 | Function | Status | Imported by | Present in |
 |---|---|---|---|
-| `XDXRCreateDevice` | implemented |  | XDefiant, Terraria, Trackmania |
+| `XDXRCreateDevice` | forwarded |  | XDefiant, Terraria, Trackmania |
 
 </details>
 
@@ -4007,7 +4006,7 @@ No PC DLL is named minuserx.dll; it is emulated by its compat crate, so no row i
 
 | Function | Status | Imported by | Present in |
 |---|---|---|---|
-| `XDXRCreateDevice` | implemented |  | XDefiant, Terraria, Trackmania |
+| `XDXRCreateDevice` | forwarded |  | XDefiant, Terraria, Trackmania |
 
 </details>
 
@@ -4446,21 +4445,21 @@ No PC DLL is named minuserx.dll; it is emulated by its compat crate, so no row i
 
 </details>
 
-<details><summary><b>xtfconsolecontrol.dll</b>: 2 console-only exports, 0 covered</summary>
-
-| Function | Status | Imported by | Present in |
-|---|---|---|---|
-| `#4` | missing |  | Fortnite, XDefiant, Terraria, Trackmania |
-| `XtfCreateConsoleControlClient` | missing |  | Fortnite |
-
-</details>
-
-<details><summary><b>xtfdebugmonitor.dll</b>: 2 console-only exports, 1 covered</summary>
+<details><summary><b>xtfconsolecontrol.dll</b>: 2 console-only exports, 1 covered</summary>
 
 | Function | Status | Imported by | Present in |
 |---|---|---|---|
 | `#4` | implemented |  | Fortnite, XDefiant, Terraria, Trackmania |
-| `XtfCreateDebugMonitorClient` | missing |  | Fortnite, XDefiant, Terraria, Trackmania |
+| `XtfCreateConsoleControlClient` | missing |  | Fortnite |
+
+</details>
+
+<details><summary><b>xtfdebugmonitor.dll</b>: 2 console-only exports, 2 covered</summary>
+
+| Function | Status | Imported by | Present in |
+|---|---|---|---|
+| `#4` | implemented |  | Fortnite, XDefiant, Terraria, Trackmania |
+| `XtfCreateDebugMonitorClient` | implemented |  | Fortnite, XDefiant, Terraria, Trackmania |
 
 </details>
 
@@ -4491,19 +4490,19 @@ No PC DLL is named minuserx.dll; it is emulated by its compat crate, so no row i
 
 </details>
 
-<details><summary><b>xtfpix.dll</b>: 9 console-only exports, 7 covered</summary>
+<details><summary><b>xtfpix.dll</b>: 9 console-only exports, 9 covered</summary>
 
 | Function | Status | Imported by | Present in |
 |---|---|---|---|
 | `#1` | implemented |  | Fortnite, XDefiant, Terraria, Trackmania |
 | `#4` | implemented |  | Fortnite, XDefiant, Terraria, Trackmania |
+| `XtfCreatePixClient` | implemented |  | Fortnite, XDefiant, Terraria, Trackmania |
+| `XtfCreatePixClientQuiet` | implemented |  | Fortnite, XDefiant, Terraria, Trackmania |
 | `XtfPixClearRunningProcessList` | implemented |  | Fortnite, XDefiant, Terraria, Trackmania |
 | `XtfPixEnableGameDvr` | implemented |  | Fortnite, XDefiant, Terraria, Trackmania |
 | `XtfPixPCLogPerformanceResult` | implemented |  | Fortnite, XDefiant, Terraria, Trackmania |
 | `XtfPixPCLogTelemetryEvent` | implemented |  | Fortnite, XDefiant, Terraria, Trackmania |
 | `XtfPixRequestVideoClip` | implemented |  | Fortnite, XDefiant, Terraria, Trackmania |
-| `XtfCreatePixClient` | missing |  | Fortnite, XDefiant, Terraria, Trackmania |
-| `XtfCreatePixClientQuiet` | missing |  | Fortnite, XDefiant, Terraria, Trackmania |
 
 </details>
 

@@ -165,17 +165,42 @@ pub fn host_close(id: u64) {
     close(&mut f, id, false);
 }
 
-pub fn is_device(h: usize) -> bool {
-    fabric().handles.contains(&h)
+#[link(name = "kernel32")]
+extern "system" {
+    fn GetModuleHandleW(name: *const u16) -> usize;
+    fn GetProcAddress(m: usize, name: *const u8) -> usize;
 }
 
-pub fn forget(h: usize) {
-    fabric().handles.remove(&h);
+type CompareFn = unsafe extern "system" fn(usize, usize) -> i32;
+
+fn compare_object_handles() -> Option<CompareFn> {
+    static F: OnceLock<usize> = OnceLock::new();
+    let p = *F.get_or_init(|| unsafe {
+        let kb: Vec<u16> = "kernelbase.dll".encode_utf16().chain(Some(0)).collect();
+        GetProcAddress(GetModuleHandleW(kb.as_ptr()), b"CompareObjectHandles\0".as_ptr())
+    });
+    (p != 0).then(|| unsafe { core::mem::transmute::<usize, CompareFn>(p) })
 }
+
+pub fn is_device(h: usize) -> bool {
+    if h == 0 || h == usize::MAX {
+        return false;
+    }
+    let privs: Vec<usize> = fabric().handles.iter().copied().collect();
+    match compare_object_handles() {
+        Some(cmp) => privs.iter().any(|&p| unsafe { cmp(h, p) } != 0),
+        None => false,
+    }
+}
+
+pub fn forget(_h: usize) {}
 
 fn deliver(f: &mut Fabric, from: u64, data: &[u8]) -> i32 {
     let Some(peer) = f.endpoints.get(&from).and_then(|e| e.connected.then_some(e.peer).flatten()) else { return STATUS_CONNECTION_INVALID };
     let Some(p) = f.endpoints.get_mut(&peer) else { return STATUS_SUCCESS };
+    if p.host {
+        compat_common::record_raw("xvcmgmt", "host", &format!("queue {from} sent {} bytes to emulated host endpoint {peer}; the host-side GameCore protocol has no console source, bytes are held for host_take_received", data.len()));
+    }
     p.rx.extend(data.iter().copied());
     pump(p);
     STATUS_SUCCESS
@@ -230,7 +255,6 @@ fn close(f: &mut Fabric, id: u64, graceful: bool) {
 enum Work {
     Listen(u64, Irp),
     Connect(u64, Irp),
-    Receive(u64, Irp),
 }
 
 fn worker() -> &'static Mutex<Sender<Work>> {
@@ -273,13 +297,6 @@ fn run(w: Work) {
             let st = connect(&mut f, id);
             unsafe { irp.complete(st, 0) };
         }
-        Work::Receive(id, irp) => match f.endpoints.get_mut(&id) {
-            None => unsafe { irp.complete(STATUS_INVALID_HANDLE, 0) },
-            Some(e) => {
-                e.receives.push_back(irp);
-                pump(e);
-            }
-        },
     }
 }
 
@@ -356,17 +373,21 @@ pub unsafe fn ioctl(io: *mut usize, event: usize, apc: usize, ctx: usize, code: 
                 return finish(irp, STATUS_BUFFER_TOO_SMALL, 0);
             }
             {
-                let f = fabric();
-                if !f.endpoints.contains_key(&id) {
-                    drop(f);
-                    return finish(irp, STATUS_INVALID_HANDLE, 0);
+                let mut f = fabric();
+                match f.endpoints.get_mut(&id) {
+                    None => {
+                        drop(f);
+                        return finish(irp, STATUS_INVALID_HANDLE, 0);
+                    }
+                    Some(e) if code == IOCTL_RECEIVE => {
+                        e.receives.push_back(irp);
+                        pump(e);
+                        return STATUS_PENDING;
+                    }
+                    Some(_) => {}
                 }
             }
-            let w = match code {
-                IOCTL_LISTEN => Work::Listen(id, irp),
-                IOCTL_CONNECT => Work::Connect(id, irp),
-                _ => Work::Receive(id, irp),
-            };
+            let w = if code == IOCTL_LISTEN { Work::Listen(id, irp) } else { Work::Connect(id, irp) };
             if let Err(e) = worker().lock().unwrap_or_else(|e| e.into_inner()).send(w) {
                 run(e.0);
             }
@@ -476,7 +497,12 @@ unsafe fn open_device(h: *mut usize, io: *mut usize) -> i32 {
     if f == -1 {
         return STATUS_INSUFFICIENT_RESOURCES;
     }
-    fabric().handles.insert(f as usize);
+    let mut private = 0usize;
+    if DuplicateHandle(GetCurrentProcess(), f as usize, GetCurrentProcess(), &mut private, 0, 0, 2) == 0 {
+        CloseHandle(f as usize);
+        return STATUS_INSUFFICIENT_RESOURCES;
+    }
+    fabric().handles.insert(private);
     *h = f as usize;
     if !io.is_null() {
         io.write_unaligned(0);

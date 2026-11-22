@@ -31,6 +31,7 @@ pub struct Layout {
 pub const READY: u32 = 0;
 pub const UNAVAILABLE: u32 = 3;
 pub const E_GAMEPACKAGE_INVALID_SELECTOR: i32 = 0x8924_5203u32 as i32;
+pub const FIND_SWALLOWED: [u32; 3] = [0x8007_0002, 0x8007_0570, 0x8007_01e7];
 
 impl Layout {
     pub fn select(&self, kind: u32, value: &str, chunk: u32) -> Vec<u32> {
@@ -309,18 +310,14 @@ unsafe extern "system" fn find_chunk_availability(_t: This, id: *const u8, n: u3
     if out.is_null() || n == 0 {
         return E_INVALIDARG;
     }
-    if let Err(e) = known_package(id) {
-        return e;
-    }
-    match resolve(n, sel) {
+    *out = UNAVAILABLE;
+    let r = known_package(id).and_then(|_| resolve(n, sel));
+    match r {
         Ok(_) => {
             *out = READY;
             S_OK
         }
-        Err(e) if e == E_GAMEPACKAGE_INVALID_SELECTOR => {
-            *out = UNAVAILABLE;
-            S_OK
-        }
+        Err(e) if FIND_SWALLOWED.contains(&(e as u32)) => S_OK,
         Err(e) => e,
     }
 }

@@ -116,21 +116,6 @@ impl Port {
         }
     }
 
-    fn take_tagged(&self, tag: usize) -> Vec<Job> {
-        let mut out = Vec::new();
-        let mut q = self.items.lock().unwrap_or_else(|e| e.into_inner());
-        let mut keep = VecDeque::with_capacity(q.len());
-        for (t, j) in q.drain(..) {
-            if t == tag {
-                out.push(j);
-            } else {
-                keep.push_back((t, j));
-            }
-        }
-        *q = keep;
-        out
-    }
-
     fn ensure_serial(self: &Arc<Port>) {
         if self.serial_started.swap(true, Ordering::AcqRel) {
             return;
@@ -230,35 +215,62 @@ pub struct Queue {
     live: Arc<Live>,
 }
 
+type Idle = Box<dyn FnOnce() + Send>;
+
+#[derive(Default)]
+struct LiveState {
+    n: usize,
+    ended: bool,
+    on_idle: Vec<Idle>,
+}
+
 #[derive(Default)]
 struct Live {
-    n: Mutex<usize>,
-    cv: Condvar,
+    st: Mutex<LiveState>,
 }
 
 impl Live {
-    fn enter(&self) {
-        *self.n.lock().unwrap_or_else(|e| e.into_inner()) += 1;
+    fn try_enter(&self) -> bool {
+        let mut s = self.st.lock().unwrap_or_else(|e| e.into_inner());
+        if s.ended {
+            return false;
+        }
+        s.n += 1;
+        true
     }
 
     fn leave(&self) {
-        let mut n = self.n.lock().unwrap_or_else(|e| e.into_inner());
-        *n = n.saturating_sub(1);
-        if *n == 0 {
-            self.cv.notify_all();
+        let run = {
+            let mut s = self.st.lock().unwrap_or_else(|e| e.into_inner());
+            s.n = s.n.saturating_sub(1);
+            if s.n == 0 && s.ended { std::mem::take(&mut s.on_idle) } else { Vec::new() }
+        };
+        for f in run {
+            f();
         }
     }
 
-    fn idle(&self) -> bool {
-        *self.n.lock().unwrap_or_else(|e| e.into_inner()) == 0
-    }
-
-    fn wait_idle(&self) {
-        let mut n = self.n.lock().unwrap_or_else(|e| e.into_inner());
-        while *n != 0 {
-            n = self.cv.wait(n).unwrap_or_else(|e| e.into_inner());
+    fn end(&self, ended: &AtomicBool, on_idle: Idle) {
+        let now = {
+            let mut s = self.st.lock().unwrap_or_else(|e| e.into_inner());
+            s.ended = true;
+            ended.store(true, Ordering::Release);
+            if s.n == 0 {
+                Some(on_idle)
+            } else {
+                s.on_idle.push(on_idle);
+                None
+            }
+        };
+        if let Some(f) = now {
+            f();
         }
     }
+}
+
+struct Signal {
+    done: Mutex<bool>,
+    cv: Condvar,
 }
 
 const QMAGIC: u64 = 0x5442_5851_5545_5545;
@@ -314,12 +326,11 @@ enum Queued {
 unsafe fn queued(h: usize, port: u32, job: Job) -> Queued {
     let Some(q) = queue(h) else { return Queued::Invalid(job) };
     let p = if port == 0 { q.work.clone() } else { q.completion.clone() };
-    if q.ended.load(Ordering::Acquire) {
+    if !q.live.try_enter() {
         return Queued::Aborted(job);
     }
     let ended = q.ended.clone();
     let live = q.live.clone();
-    live.enter();
     Queued::Ready(
         p,
         resolve(h),
@@ -400,16 +411,17 @@ pub unsafe fn submit_delayed(queue_h: usize, port: u32, delay_ms: u32, job: Job)
     S_OK
 }
 
-fn cancel_pending(tag: usize, ports: &[&Arc<Port>]) {
-    let mut jobs: Vec<Job> = Vec::new();
+fn flush_timers(tag: usize) {
+    let mut due: Vec<(Arc<Port>, Job)> = Vec::new();
     {
         let (m, cv) = timers();
         let mut v = m.lock().unwrap_or_else(|e| e.into_inner());
         let mut i = 0;
         while i < v.len() {
             if v[i].1 == tag {
-                if let Some(j) = v.swap_remove(i).3 {
-                    jobs.push(j);
+                let (_, _, p, j) = v.swap_remove(i);
+                if let Some(j) = j {
+                    due.push((p, j));
                 }
             } else {
                 i += 1;
@@ -417,24 +429,8 @@ fn cancel_pending(tag: usize, ports: &[&Arc<Port>]) {
         }
         cv.notify_all();
     }
-    {
-        let p = pool();
-        let mut q = p.q.lock().unwrap_or_else(|e| e.into_inner());
-        let mut keep = VecDeque::with_capacity(q.len());
-        for (t, j) in q.drain(..) {
-            if t == tag {
-                jobs.push(j);
-            } else {
-                keep.push_back((t, j));
-            }
-        }
-        *q = keep;
-    }
-    for port in ports {
-        jobs.extend(port.take_tagged(tag));
-    }
-    for j in jobs {
-        j(true);
+    for (p, j) in due {
+        p.submit_tagged(tag, j);
     }
 }
 
@@ -514,43 +510,37 @@ unsafe extern "system" fn q_submit_delayed(_t: This, q: usize, port: u32, delay:
     submit_delayed(q, port, delay, callback_job(ctx, cb))
 }
 
+pub const E_ACCESSDENIED: i32 = 0x8007_0005u32 as i32;
+
 unsafe extern "system" fn q_terminate(_t: This, q: usize, wait: bool, ctx: *mut c_void, cb: Option<TerminatedCb>) -> i32 {
     let Some(qq) = queue(q) else { return E_INVALIDARG };
     if qq.process {
-        return E_INVALIDARG;
+        return E_ACCESSDENIED;
     }
-    qq.ended.store(true, Ordering::Release);
-    cancel_pending(resolve(q), &[&qq.work, &qq.completion]);
-    if qq.owns {
-        qq.work.cancel_all();
-        qq.completion.cancel_all();
-    }
+    let sig = Arc::new(Signal { done: Mutex::new(false), cv: Condvar::new() });
     let c = SendPtr(ctx as usize);
+    let s2 = sig.clone();
     let done = move || {
         if let Some(cb) = cb {
             cb(c.0 as *mut c_void);
         }
+        *s2.done.lock().unwrap_or_else(|e| e.into_inner()) = true;
+        s2.cv.notify_all();
     };
-    let live = qq.live.clone();
-    if wait {
-        live.wait_idle();
-        done();
-        return S_OK;
-    }
     let work = qq.work.clone();
     let completion = qq.completion.clone();
-    let route = move || {
+    let route: Idle = Box::new(move || {
         let deliver: Job = Box::new(move |_| done());
         let forward: Job = Box::new(move |_| completion.submit_marker(deliver));
         work.submit_marker(forward);
-    };
-    if live.idle() {
-        route();
-    } else {
-        std::thread::spawn(move || {
-            live.wait_idle();
-            route();
-        });
+    });
+    qq.live.end(&qq.ended, route);
+    flush_timers(resolve(q));
+    if wait {
+        let mut d = sig.done.lock().unwrap_or_else(|e| e.into_inner());
+        while !*d {
+            d = sig.cv.wait(d).unwrap_or_else(|e| e.into_inner());
+        }
     }
     S_OK
 }

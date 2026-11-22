@@ -3,6 +3,16 @@ use core::sync::atomic::{AtomicBool, AtomicU32, AtomicUsize, Ordering};
 use compat_common::record;
 
 pub const SET_MASK: u32 = 0x83f0_0001;
+pub const SET_MASK_19041: u32 = 0x81f0_0001;
+pub const NEW_ABI_BUILD: u32 = 22000;
+
+pub fn console_os_build() -> u32 {
+    compat_common::os_host::k32legacy::console_os_build()
+}
+
+pub fn set_mask_for(os_build: u32) -> u32 {
+    if os_build < NEW_ABI_BUILD { SET_MASK_19041 } else { SET_MASK }
+}
 pub const FLAG_DEBUG: u32 = 0x0000_0001;
 pub const FLAG_INSTRUMENTED: u32 = 0x0010_0000;
 pub const FLAG_DEBUG_STOCK: u32 = 0x8000_0000;
@@ -50,7 +60,11 @@ pub fn current() -> u32 {
 }
 
 pub fn store_set(flags: u32) -> u32 {
-    let v = flags & SET_MASK;
+    store_set_for(flags, console_os_build())
+}
+
+pub fn store_set_for(flags: u32, os_build: u32) -> u32 {
+    let v = flags & set_mask_for(os_build);
     FLAGS.store(v, Ordering::SeqCst);
     v
 }
@@ -112,7 +126,7 @@ pub extern "system" fn D3D12XboxSetProcessDebugFlags(flags: u32) -> i32 {
     let d = driver_for(v);
     log(
         "D3D12XboxSetProcessDebugFlags",
-        &format!("flags={flags:#010x} stored={v:#010x} (mask {SET_MASK:#x}) next device: console UMD={} pc debug layer={} -> S_OK", d.console_umd(), d.pc_debug_layer()),
+        &format!("flags={flags:#010x} stored={v:#010x} (mask {:#x}) next device: console UMD={} pc debug layer={} -> S_OK", set_mask_for(console_os_build()), d.console_umd(), d.pc_debug_layer()),
     );
     0
 }

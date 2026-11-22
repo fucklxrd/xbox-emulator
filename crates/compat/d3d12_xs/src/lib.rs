@@ -257,16 +257,32 @@ pub extern "system" fn D3D12CreateDevice(
     riid: *const c_void,
     pp_device: *mut *mut c_void,
 ) -> i32 {
-    let params = default_create_params(process_debug::current());
+    let params = default_create_params_for(process_debug::current(), process_debug::console_os_build());
     record(M, "D3D12CreateDevice", &format!("min feature level {min_feature_level:#x} ignored as on console; D3D12XboxCreateDevice with version {:#x} flags {:#010x}", params[0], params[1]));
     D3D12XboxCreateDevice(adapter, params.as_ptr() as *const c_void, riid, pp_device)
 }
 
 pub const CREATE_PARAMS_VERSION: u32 = 0x20004;
+pub const CREATE_PARAMS_VERSION_19041: u32 = 0x20002;
+pub const CREATE_PARAMS_BYTES: usize = 0x48;
+pub const CREATE_PARAMS_BYTES_19041: usize = 0x40;
+
+pub fn create_params_layout(os_build: u32) -> (u32, usize) {
+    if os_build < process_debug::NEW_ABI_BUILD {
+        (CREATE_PARAMS_VERSION_19041, CREATE_PARAMS_BYTES_19041)
+    } else {
+        (CREATE_PARAMS_VERSION, CREATE_PARAMS_BYTES)
+    }
+}
 
 pub fn default_create_params(flags: u32) -> [u32; 18] {
+    default_create_params_for(flags, process_debug::NEW_ABI_BUILD)
+}
+
+pub fn default_create_params_for(flags: u32, os_build: u32) -> [u32; 18] {
+    let (version, _) = create_params_layout(os_build);
     let mut p = [0u32; 18];
-    p[0] = CREATE_PARAMS_VERSION;
+    p[0] = version;
     p[1] = flags;
     p[2] = u32::MAX;
     p[6] = u32::MAX;

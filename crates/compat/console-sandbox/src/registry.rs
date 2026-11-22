@@ -23,6 +23,8 @@ pub const STATUS_INVALID_PARAMETER: i32 = 0xC000_000Du32 as i32;
 pub const STATUS_OBJECT_NAME_NOT_FOUND: i32 = 0xC000_0034u32 as i32;
 pub const STATUS_ACCESS_VIOLATION: i32 = 0xC000_0005u32 as i32;
 
+pub const ERROR_KEY_DELETED: u32 = 1018;
+pub const STATUS_KEY_DELETED: i32 = 0xC000_017Cu32 as i32;
 pub const ERROR_SUCCESS: u32 = 0;
 pub const ERROR_FILE_NOT_FOUND: u32 = 2;
 pub const ERROR_INVALID_HANDLE: u32 = 6;
@@ -68,7 +70,7 @@ pub(crate) fn store() -> MutexGuard<'static, Store> {
     g
 }
 
-fn now() -> u64 {
+pub(crate) fn now() -> u64 {
     let d = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap_or_default();
     (d.as_nanos() / 100) as u64 + 116_444_736_000_000_000
 }
@@ -144,11 +146,15 @@ impl Store {
             acc.push('\\');
             acc.push_str(c);
             let l = acc.to_lowercase();
-            if !self.keys.contains_key(&l) {
+            let fresh = !self.keys.contains_key(&l);
+            if fresh {
                 self.keys.insert(l.clone(), Key { path: acc.clone(), written: now(), ..Key::default() });
             }
             if let Some(p) = parent.as_ref().and_then(|p| self.keys.get_mut(p)) {
                 p.subkeys.entry(c.to_lowercase()).or_insert_with(|| c.to_string());
+                if fresh {
+                    p.written = now();
+                }
             }
             parent = Some(l);
         }
@@ -170,6 +176,10 @@ impl Store {
             HKEY_CLASSES_ROOT => Some("\\registry\\machine\\software\\classes".into()),
             _ => self.handles.get(&h).map(|k| self.keys.get(k).map(|k| k.path.clone()).unwrap_or_else(|| k.clone())),
         }
+    }
+
+    pub(crate) fn deleted(&self, h: usize) -> bool {
+        self.handles.get(&h).is_some_and(|k| !self.keys.contains_key(k))
     }
 
     pub(crate) fn join(&self, h: usize, sub: &str) -> Option<String> {
@@ -263,6 +273,9 @@ pub unsafe extern "system" fn nt_create_key(out: *mut usize, _access: u32, oa: *
         return STATUS_ACCESS_VIOLATION;
     }
     let mut s = store();
+    if !oa.is_null() && s.deleted((oa.add(8) as *const usize).read_unaligned()) {
+        return STATUS_KEY_DELETED;
+    }
     let path = match object_path(&s, oa) {
         Ok(p) => p,
         Err(e) => return e,
@@ -297,6 +310,9 @@ pub unsafe extern "system" fn nt_open_key(out: *mut usize, _access: u32, oa: *co
 pub unsafe extern "system" fn nt_set_value_key(h: usize, name: *const u8, _title: u32, kind: u32, data: *const u8, size: u32) -> i32 {
     let mut s = store();
     let Some(k) = s.handles.get(&h).cloned() else { return STATUS_INVALID_HANDLE };
+    if s.deleted(h) {
+        return STATUS_KEY_DELETED;
+    }
     let n = from_unicode_string(name);
     let d = if data.is_null() { Vec::new() } else { std::slice::from_raw_parts(data, size as usize).to_vec() };
     set_in(&mut s, &k, &n, kind, &d);
@@ -340,6 +356,9 @@ pub unsafe extern "system" fn reg_create_key_ex_w(h: usize, sub: *const u16, _re
         return ERROR_INVALID_PARAMETER;
     }
     let mut s = store();
+    if s.deleted(h) {
+        return ERROR_KEY_DELETED;
+    }
     let Some(p) = s.join(h, &from_ptr(sub)) else { return ERROR_INVALID_HANDLE };
     let existed = s.keys.contains_key(&p.to_lowercase());
     let k = s.ensure(&p);
@@ -361,6 +380,9 @@ pub unsafe extern "system" fn reg_close_key(h: usize) -> u32 {
 
 pub unsafe extern "system" fn reg_set_value_ex_w(h: usize, name: *const u16, _res: u32, kind: u32, data: *const u8, size: u32) -> u32 {
     let mut s = store();
+    if s.deleted(h) {
+        return ERROR_KEY_DELETED;
+    }
     let Some(p) = s.join(h, "") else { return ERROR_INVALID_HANDLE };
     let k = s.ensure(&p);
     let d = if data.is_null() { Vec::new() } else { std::slice::from_raw_parts(data, size as usize).to_vec() };

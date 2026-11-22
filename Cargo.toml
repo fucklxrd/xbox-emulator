@@ -71,6 +71,7 @@ members = [
     "crates/compat/xtfmsg",
     "crates/compat/xtfdebugmonitor",
     "crates/compat/xtffileio",
+    "crates/compat/xtfconsolecontrol",
     "crates/compat/pixlivemerge",
     "crates/compat/advapi32legacy",
     "crates/compat/advapi32",

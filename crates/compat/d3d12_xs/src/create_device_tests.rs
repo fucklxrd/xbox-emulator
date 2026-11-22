@@ -42,3 +42,16 @@ fn create_device_returns_wrapped_device() {
         rel(dev);
     }
 }
+
+#[test]
+fn console_abi_follows_title_os_build() {
+    assert_eq!(crate::process_debug::set_mask_for(19041), 0x81f0_0001);
+    assert_eq!(crate::process_debug::set_mask_for(22000), 0x83f0_0001);
+    assert_eq!(crate::process_debug::set_mask_for(25398), 0x83f0_0001);
+    assert_eq!(crate::create_params_layout(19041), (0x20002, 0x40));
+    assert_eq!(crate::create_params_layout(22000), (0x20004, 0x48));
+    let old = crate::default_create_params_for(1, 19041);
+    assert_eq!((old[0], old[1], old[2], old[6], old[7]), (0x20002, 1, u32::MAX, u32::MAX, u32::MAX));
+    assert!(old[16..].iter().all(|&w| w == 0));
+    assert_eq!(crate::default_create_params_for(1, 22000)[0], 0x20004);
+}

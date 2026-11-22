@@ -219,3 +219,181 @@ fn scm_a_and_status_notifications_follow_win32() {
         host::close_service_handle(scm);
     }
 }
+
+#[link(name = "kernel32")]
+extern "system" {
+    fn CreateEventW(sa: *const core::ffi::c_void, manual: i32, initial: i32, name: *const u16) -> usize;
+    fn WaitForSingleObject(h: usize, ms: u32) -> u32;
+    fn CloseHandle(h: usize) -> i32;
+    fn OpenProcessToken(p: usize, a: u32, h: *mut usize) -> i32;
+    fn GetCurrentProcess() -> usize;
+}
+
+fn open_xvcmgmt() -> usize {
+    let name = w(xvcmgmt::DEVICE);
+    let bytes = (name.len() - 1) * 2;
+    let us: [usize; 2] = [bytes | (bytes << 16), name.as_ptr() as usize];
+    let oa: [usize; 6] = [0x30, 0, us.as_ptr() as usize, 0x40, 0, 0];
+    let mut h = 0usize;
+    let mut io = [7usize; 2];
+    assert_eq!(unsafe { xvcmgmt::nt_open_file(&mut h, 0x100003, oa.as_ptr() as *const u8, io.as_mut_ptr(), 3, 0) }, 0);
+    assert_eq!(io, [0, 1], "IOSB: STATUS_SUCCESS, FILE_OPENED");
+    assert!(xvcmgmt::is_device(h));
+    h
+}
+
+struct Call {
+    io: Box<[usize; 2]>,
+    ev: usize,
+}
+
+impl Call {
+    fn new() -> Call {
+        Call { io: Box::new([0x55; 2]), ev: unsafe { CreateEventW(core::ptr::null(), 1, 0, core::ptr::null()) } }
+    }
+    fn run(&mut self, h: usize, code: u32, inb: &[u8], out: &mut [u8]) -> i32 {
+        let o = if out.is_empty() { core::ptr::null_mut() } else { out.as_mut_ptr() };
+        unsafe { xvcmgmt::nt_device_io_control_file(h, self.ev, 0, 0, self.io.as_mut_ptr(), code, inb.as_ptr(), inb.len() as u32, o, out.len() as u32) }
+    }
+    fn wait(&self, ms: u32) -> Option<(i32, usize)> {
+        (unsafe { WaitForSingleObject(self.ev, ms) } == 0).then(|| (self.io[0] as u32 as i32, self.io[1]))
+    }
+}
+
+impl Drop for Call {
+    fn drop(&mut self) {
+        unsafe { CloseHandle(self.ev) };
+    }
+}
+
+fn create(h: usize, vm: [u8; 16], svc: [u8; 16]) -> u64 {
+    let mut inb = vm.to_vec();
+    inb.extend_from_slice(&svc);
+    let mut out = [0u8; 8];
+    let mut c = Call::new();
+    assert_eq!(c.run(h, xvcmgmt::IOCTL_CREATE, &inb, &mut out), 0);
+    assert_eq!(c.wait(0), Some((0, 8)));
+    u64::from_le_bytes(out)
+}
+
+fn pend(h: usize, code: u32, id: u64, out: &mut [u8]) -> Call {
+    let mut c = Call::new();
+    assert_eq!(c.run(h, code, &id.to_le_bytes(), out), xvcmgmt::STATUS_PENDING, "{code:#x} pends like the driver's worker");
+    c
+}
+
+fn send(h: usize, id: u64, data: &[u8]) -> i32 {
+    let mut inb = id.to_le_bytes().to_vec();
+    inb.extend_from_slice(&(data.as_ptr() as u64).to_le_bytes());
+    inb.extend_from_slice(&(data.len() as u32).to_le_bytes());
+    Call::new().run(h, xvcmgmt::IOCTL_SEND, &inb, &mut [])
+}
+
+#[test]
+fn xvcmgmt_queue_follows_the_driver() {
+    let _g = init();
+    let h = open_xvcmgmt();
+    let svc = [0x42u8; 16];
+    let mut c = Call::new();
+    assert_eq!(c.run(h, xvcmgmt::IOCTL_CREATE, &[0; 0x1f], &mut [0; 8]), xvcmgmt::STATUS_INVALID_PARAMETER);
+    assert_eq!(c.wait(0), None, "a synchronous failure leaves the event and IOSB alone");
+    assert_eq!(c.run(h, xvcmgmt::IOCTL_RECEIVE, &7u64.to_le_bytes(), &mut []), xvcmgmt::STATUS_BUFFER_TOO_SMALL);
+    assert_eq!(Call::new().run(h, xvcmgmt::IOCTL_ACCEPT, &[0; 8], &mut [0; 4]), xvcmgmt::STATUS_BUFFER_TOO_SMALL);
+    assert_eq!(Call::new().run(h, xvcmgmt::IOCTL_SEND, &[0; 0x15], &mut []), xvcmgmt::STATUS_INVALID_PARAMETER);
+    assert_eq!(Call::new().run(h, xvcmgmt::IOCTL_CLOSE, &0xdeadu64.to_le_bytes(), &mut []), 0, "close of an unknown id is STATUS_SUCCESS");
+    assert_eq!(Call::new().run(h, xvcmgmt::IOCTL_CONNECT, &0xdeadu64.to_le_bytes(), &mut []), xvcmgmt::STATUS_INVALID_HANDLE);
+
+    let lone = create(h, xvcmgmt::LOOPBACK_VM, [0x99; 16]);
+    assert_eq!(pend(h, xvcmgmt::IOCTL_CONNECT, lone, &mut []).wait(5000), Some((xvcmgmt::STATUS_CONNECTION_REFUSED, 0)), "no listener");
+
+    let server = create(h, xvcmgmt::LOOPBACK_VM, svc);
+    let a = create(h, xvcmgmt::LOOPBACK_VM, svc);
+    assert!(a > server && server >= 2);
+    assert_eq!(pend(h, xvcmgmt::IOCTL_LISTEN, server, &mut []).wait(5000), Some((0, 0)));
+    let mut accepted = [0u8; 8];
+    let mut acc = Call::new();
+    assert_eq!(acc.run(h, xvcmgmt::IOCTL_ACCEPT, &server.to_le_bytes(), &mut accepted), xvcmgmt::STATUS_PENDING);
+    assert_eq!(pend(h, xvcmgmt::IOCTL_CONNECT, a, &mut []).wait(5000), Some((0, 0)));
+    assert_eq!(acc.wait(5000), Some((0, 8)));
+    let b = u64::from_le_bytes(accepted);
+    assert!(b > a);
+
+    let mut buf = [0u8; 4];
+    let r = pend(h, xvcmgmt::IOCTL_RECEIVE, b, &mut buf);
+    assert_eq!(r.wait(100), None, "receive stays pending until bytes arrive");
+    assert_eq!(send(h, a, b"hello"), 0);
+    assert_eq!(r.wait(5000), Some((0, 4)), "stream semantics: as many bytes as fit");
+    assert_eq!(&buf, b"hell");
+    let mut rest = [0u8; 16];
+    assert_eq!(pend(h, xvcmgmt::IOCTL_RECEIVE, b, &mut rest).wait(5000), Some((0, 1)));
+    assert_eq!(rest[0], b'o');
+
+    assert_eq!(Call::new().run(h, xvcmgmt::IOCTL_SHUTDOWN, &a.to_le_bytes(), &mut []), 0);
+    assert_eq!(pend(h, xvcmgmt::IOCTL_RECEIVE, b, &mut rest).wait(5000), Some((0, 0)), "graceful disconnect reads as 0 bytes");
+    assert_eq!(Call::new().run(h, xvcmgmt::IOCTL_SHUTDOWN, &a.to_le_bytes(), &mut []), xvcmgmt::STATUS_NOT_CONNECTED);
+
+    let mut pa = Call::new();
+    assert_eq!(pa.run(h, xvcmgmt::IOCTL_ACCEPT, &server.to_le_bytes(), &mut accepted), xvcmgmt::STATUS_PENDING);
+    assert_eq!(Call::new().run(h, xvcmgmt::IOCTL_CLOSE, &server.to_le_bytes(), &mut []), 0);
+    assert_eq!(pa.wait(5000), Some((xvcmgmt::STATUS_LOCAL_DISCONNECT, 0)), "pending accepts complete with STATUS_LOCAL_DISCONNECT");
+
+    let host = create(h, xvcmgmt::HOST_VM, claims::launch_instance());
+    assert_eq!(pend(h, xvcmgmt::IOCTL_CONNECT, host, &mut []).wait(5000), Some((0, 0)), "the emulated host listens on c12a416b + XBOX://LI");
+    assert_eq!(Call::new().run(h, xvcmgmt::IOCTL_SHUTDOWN, &host.to_le_bytes(), &mut []), xvcmgmt::STATUS_NOT_IMPLEMENTED_PEER, "graceful disconnect is loopback-only");
+    let conns = xvcmgmt::host_connections(claims::launch_instance());
+    assert_eq!(conns.len(), 1);
+    assert_eq!(send(h, host, b"to-host"), 0);
+    assert_eq!(xvcmgmt::host_take_received(conns[0]), b"to-host");
+    let mut got = [0u8; 8];
+    let hr = pend(h, xvcmgmt::IOCTL_RECEIVE, host, &mut got);
+    assert_eq!(xvcmgmt::host_send(conns[0], b"reply"), 0);
+    assert_eq!(hr.wait(5000), Some((0, 5)));
+    assert_eq!(&got[..5], b"reply");
+    let hr2 = pend(h, xvcmgmt::IOCTL_RECEIVE, host, &mut got);
+    xvcmgmt::host_close(conns[0]);
+    assert_eq!(hr2.wait(5000), Some((xvcmgmt::STATUS_CONNECTION_RESET, 0)), "abortive peer close");
+    assert_eq!(send(h, host, b"x"), xvcmgmt::STATUS_CONNECTION_INVALID);
+    let cancelled = pend(h, xvcmgmt::IOCTL_RECEIVE, lone, &mut got);
+    assert_eq!(Call::new().run(h, xvcmgmt::IOCTL_CLOSE, &lone.to_le_bytes(), &mut []), 0);
+    assert_eq!(cancelled.wait(5000), Some((xvcmgmt::STATUS_CANCELLED, 0)), "close cancels in-flight receives");
+    assert_eq!(Call::new().run(h, 0x150094, &[], &mut [0; 4]), xvcmgmt::STATUS_INVALID_DEVICE_REQUEST);
+    let mut dup = 0usize;
+    extern "system" {
+        fn DuplicateHandle(sp: usize, sh: usize, tp: usize, th: *mut usize, access: u32, inherit: i32, opts: u32) -> i32;
+    }
+    assert_ne!(unsafe { DuplicateHandle(GetCurrentProcess(), h, GetCurrentProcess(), &mut dup, 0, 0, 2) }, 0);
+    assert!(xvcmgmt::is_device(dup), "a duplicated device handle still reaches the device");
+    assert_eq!(unsafe { nt_close(h) }, 0);
+    assert!(!xvcmgmt::is_device(h), "a closed handle value is no longer the device");
+    assert_eq!(Call::new().run(dup, xvcmgmt::IOCTL_CLOSE, &0u64.to_le_bytes(), &mut []), 0);
+    unsafe { CloseHandle(dup) };
+    assert!(!xvcmgmt::is_device(dup));
+}
+
+#[test]
+fn launch_claim_is_merged_into_the_process_token_attributes() {
+    let _g = init();
+    let mut need = 0u32;
+    assert_eq!(unsafe { claims::nt_query_information_token(usize::MAX - 3, claims::TOKEN_SECURITY_ATTRIBUTES, core::ptr::null_mut(), 0, &mut need) }, 0xC000_0023u32 as i32);
+    let mut buf = vec![0u64; need as usize / 8 + 1];
+    assert_eq!(unsafe { claims::nt_query_information_token(usize::MAX - 3, claims::TOKEN_SECURITY_ATTRIBUTES, buf.as_mut_ptr() as *mut u8, need, &mut need) }, 0);
+    let attrs = unsafe { claims::parse(buf.as_ptr() as usize) }.unwrap();
+    let li: Vec<&claims::Attribute> = attrs.iter().filter(|a| String::from_utf16_lossy(&a.name) == "XBOX://LI").collect();
+    assert_eq!(li.len(), 1);
+    assert_eq!(li[0].kind, claims::TYPE_OCTET_STRING);
+    assert_eq!(li[0].values, vec![claims::Value::Bytes(claims::launch_instance().to_vec())]);
+    let real = attrs.len() - 1;
+    let round = claims::merge(attrs.clone(), claims::emulated());
+    assert_eq!(round.len(), real + 1, "merging again replaces, never duplicates");
+    let mut again = vec![0u64; claims::size_of(&round) / 8 + 1];
+    unsafe { claims::write(&round, again.as_mut_ptr() as usize) };
+    assert_eq!(unsafe { claims::parse(again.as_ptr() as usize) }.unwrap(), round);
+    assert_eq!(claims::parse_guid(&claims::format_guid(&claims::launch_instance())), Some(claims::launch_instance()));
+    assert_eq!(claims::parse_guid("c12a416b-f347-405c-b765-2de027a6249e"), Some(xvcmgmt::HOST_VM));
+    assert_eq!(claims::parse_guid("e0e16197-dd56-4a10-9195-5ee7a155a838"), Some(xvcmgmt::LOOPBACK_VM));
+    assert!(unsafe { claims::is_process_token(usize::MAX - 3) });
+    let mut other = 0usize;
+    assert_ne!(unsafe { OpenProcessToken(GetCurrentProcess(), 8, &mut other) }, 0);
+    assert!(unsafe { claims::is_process_token(other) });
+    unsafe { CloseHandle(other) };
+}

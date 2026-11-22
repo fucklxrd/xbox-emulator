@@ -66,7 +66,7 @@ pub(crate) enum Outcome {
 fn why(s: Stop) -> String {
     match s {
         Stop::Fault(t) => format!("the console faults here ({t}), so it never returns"),
-        Stop::Undef(t) => format!("console output is undefined here ({t})"),
+        Stop::Undef(t) => format!("console behaviour is not fixed by the inputs here ({t})"),
     }
 }
 

@@ -422,7 +422,7 @@ pub(crate) fn key_encode(d: &mut Dcc, off: u32, len: u32, size: u32) -> R<()> {
 
 fn s1(d: &mut Dcc, at: u32, v: u8) -> R<()> {
     if at >= 256 {
-        return Err(Stop::Undef("packed stream runs past the 256-byte output block"));
+        return Err(Stop::Undef("the packed stream overruns the console's 256-byte heap output surface; whether the console then crashes depends on what the heap holds next to it"));
     }
     d.s[1][at as usize] = v;
     Ok(())
@@ -500,7 +500,7 @@ pub(crate) fn emit(d: &mut Dcc, first: u32, last: u32, size: u32) -> R<()> {
     let mut j = home[0];
     loop {
         if j >= 4 {
-            return Err(Stop::Undef("packer bit-plane loop walks past sector 3 after its stack arguments were overwritten"));
+            return Err(Stop::Fault("packer bit-plane loop walks past sector 3 after its stack arguments were overwritten and reads outside the codec object"));
         }
         let ju = j as usize;
         for i in 0..8u32 {

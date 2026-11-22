@@ -236,6 +236,26 @@ fn ansi_window_wndproc_reads_back_registered_proc() {
         assert_eq!(get_a(h, GWLP_WNDPROC) as usize, proc_a as usize);
         assert_eq!(set_a(h, GWLP_USERDATA, 0x1234), 0);
         assert_eq!(get_w(h, GWLP_USERDATA), 0x1234);
+        for bad in [-6, -8, -12, -16, -20] {
+            SetLastError(0x77);
+            assert_eq!(get_w(h, bad), 0, "get index {bad}");
+            assert_eq!(GetLastError(), 87, "get index {bad}");
+            SetLastError(0x77);
+            assert_eq!(get_a(h, bad), 0);
+            assert_eq!(GetLastError(), 87);
+            SetLastError(0x77);
+            assert_eq!(set_w(h, bad, 5), 0, "set index {bad}");
+            assert_eq!(GetLastError(), 87, "set index {bad}");
+            SetLastError(0x77);
+            assert_eq!(set_a(h, bad, 5), 0);
+            assert_eq!(GetLastError(), 87);
+        }
+        SetLastError(0x77);
+        assert_eq!(get_a(h, GWLP_USERDATA), 0x1234);
+        assert_eq!(GetLastError(), 0);
+        SetLastError(0x77);
+        assert_eq!(set_a(h, GWLP_USERDATA, 0), 0x1234);
+        assert_eq!(GetLastError(), 0);
         DestroyWindow(h);
         UnregisterClassA(name.as_ptr(), inst);
     }

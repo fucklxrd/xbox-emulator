@@ -1,0 +1,175 @@
+use console_sandbox::{claims, xvcmgmt};
+
+extern "system" {
+    fn CreateEventW(sa: *const core::ffi::c_void, manual: i32, initial: i32, name: *const u16) -> usize;
+    fn WaitForSingleObject(h: usize, ms: u32) -> u32;
+    fn CloseHandle(h: usize) -> i32;
+}
+
+const STATUS_NOT_IMPLEMENTED: i32 = 0xC000_0002u32 as i32;
+const STATUS_INVALID_CONNECTION: i32 = 0xC000_0140u32 as i32;
+const STATUS_INVALID_CONNECTION_STATE: i32 = 0xC000_02CCu32 as i32;
+
+fn setup() {
+    let dir = std::path::PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join(format!("verify_xvcmgmt_{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    std::env::set_var("TOMBOX_LOG", dir.join("tombox_compat.log"));
+    std::env::set_var("TOMBOX_GDK_ROOT", dir.join("data"));
+}
+
+struct Call {
+    io: Box<[usize; 2]>,
+    ev: usize,
+}
+
+impl Call {
+    fn new() -> Call {
+        Call { io: Box::new([0x55; 2]), ev: unsafe { CreateEventW(core::ptr::null(), 1, 0, core::ptr::null()) } }
+    }
+    fn run(&mut self, code: u32, inb: &[u8], out: &mut [u8]) -> i32 {
+        let o = if out.is_empty() { core::ptr::null_mut() } else { out.as_mut_ptr() };
+        let i = if inb.is_empty() { core::ptr::null() } else { inb.as_ptr() };
+        unsafe { xvcmgmt::ioctl(self.io.as_mut_ptr(), self.ev, 0, 0, code, i, inb.len() as u32, o, out.len() as u32) }
+    }
+    fn wait(&self, ms: u32) -> Option<(i32, usize)> {
+        (unsafe { WaitForSingleObject(self.ev, ms) } == 0).then(|| (self.io[0] as u32 as i32, self.io[1]))
+    }
+    fn untouched(&self) -> bool {
+        self.wait(0).is_none() && self.io[0] == 0x55 && self.io[1] == 0x55
+    }
+}
+
+impl Drop for Call {
+    fn drop(&mut self) {
+        unsafe { CloseHandle(self.ev) };
+    }
+}
+
+fn sync_fail(code: u32, inb: &[u8], out: &mut [u8]) -> i32 {
+    let mut c = Call::new();
+    let st = c.run(code, inb, out);
+    assert!(st < 0, "{code:#x} expected a synchronous failure, got {st:#x}");
+    assert!(c.untouched(), "{code:#x}: a synchronous NT_ERROR must not signal the event or write the IOSB");
+    st
+}
+
+fn create(vm: [u8; 16], svc: [u8; 16]) -> u64 {
+    let mut inb = vm.to_vec();
+    inb.extend_from_slice(&svc);
+    let mut out = [0u8; 8];
+    let mut c = Call::new();
+    assert_eq!(c.run(xvcmgmt::IOCTL_CREATE, &inb, &mut out), 0);
+    assert_eq!(c.wait(0), Some((0, 8)), "CREATE completes synchronously with Information = 8");
+    u64::from_le_bytes(out)
+}
+
+fn pend(code: u32, id: u64, out: &mut [u8]) -> Call {
+    let mut c = Call::new();
+    assert_eq!(c.run(code, &id.to_le_bytes(), out), xvcmgmt::STATUS_PENDING, "{code:#x}");
+    c
+}
+
+fn send_entries(id: u64, entries: &[(&[u8], u32)]) -> (i32, Call) {
+    let mut inb = id.to_le_bytes().to_vec();
+    for (p, l) in entries {
+        inb.extend_from_slice(&(p.as_ptr() as u64).to_le_bytes());
+        inb.extend_from_slice(&l.to_le_bytes());
+    }
+    let mut c = Call::new();
+    let st = c.run(xvcmgmt::IOCTL_SEND, &inb, &mut []);
+    (st, c)
+}
+
+#[test]
+fn driver_size_checks_and_status_codes() {
+    setup();
+    assert_eq!(sync_fail(xvcmgmt::IOCTL_CREATE, &[0; 0x20], &mut [0; 7]), xvcmgmt::STATUS_INVALID_PARAMETER, "CREATE out < 8");
+    assert_eq!(sync_fail(xvcmgmt::IOCTL_LISTEN, &[0; 7], &mut []), xvcmgmt::STATUS_INVALID_PARAMETER, "LISTEN in < 8");
+    assert_eq!(sync_fail(xvcmgmt::IOCTL_CONNECT, &[0; 7], &mut []), xvcmgmt::STATUS_INVALID_PARAMETER, "CONNECT in < 8");
+    assert_eq!(sync_fail(xvcmgmt::IOCTL_LISTEN, &0xbeefu64.to_le_bytes(), &mut []), xvcmgmt::STATUS_INVALID_HANDLE, "LISTEN unknown id is synchronous");
+    assert_eq!(sync_fail(xvcmgmt::IOCTL_ACCEPT, &0xbeefu64.to_le_bytes(), &mut [0; 8]), xvcmgmt::STATUS_INVALID_HANDLE);
+    assert_eq!(sync_fail(xvcmgmt::IOCTL_ACCEPT, &[0; 7], &mut [0; 8]), xvcmgmt::STATUS_BUFFER_TOO_SMALL);
+    assert_eq!(sync_fail(xvcmgmt::IOCTL_RECEIVE, &[0; 7], &mut [0; 8]), xvcmgmt::STATUS_BUFFER_TOO_SMALL);
+    assert_eq!(sync_fail(xvcmgmt::IOCTL_RECEIVE, &0xbeefu64.to_le_bytes(), &mut [0; 8]), xvcmgmt::STATUS_INVALID_HANDLE);
+    assert_eq!(sync_fail(xvcmgmt::IOCTL_SEND, &[0; 0x13], &mut []), xvcmgmt::STATUS_INVALID_PARAMETER, "SEND in < 0x14");
+    assert_eq!(sync_fail(xvcmgmt::IOCTL_SEND, &[0; 0x20], &mut []), xvcmgmt::STATUS_INVALID_PARAMETER, "SEND (in-8) % 12 != 0");
+    let b = [1u8; 4];
+    assert_eq!(send_entries(0xbeef, &[(&b, 4)]).0, xvcmgmt::STATUS_INVALID_HANDLE);
+    assert_eq!(sync_fail(xvcmgmt::IOCTL_CLOSE, &[0; 7], &mut []), xvcmgmt::STATUS_INVALID_PARAMETER);
+    assert_eq!(sync_fail(xvcmgmt::IOCTL_SHUTDOWN, &[0; 7], &mut []), xvcmgmt::STATUS_INVALID_PARAMETER);
+    assert_eq!(sync_fail(xvcmgmt::IOCTL_SHUTDOWN, &0xbeefu64.to_le_bytes(), &mut []), xvcmgmt::STATUS_INVALID_HANDLE);
+    assert_eq!(sync_fail(0x0015_0099, &[0; 8], &mut []), xvcmgmt::STATUS_INVALID_DEVICE_REQUEST);
+
+    let lone = create(xvcmgmt::LOOPBACK_VM, [0x31; 16]);
+    assert_eq!(send_entries(lone, &[(&b, 4)]).0, STATUS_INVALID_CONNECTION, "SEND on an unconnected queue");
+    assert_eq!(sync_fail(xvcmgmt::IOCTL_SHUTDOWN, &lone.to_le_bytes(), &mut []), STATUS_INVALID_CONNECTION_STATE, "loopback, not connected");
+    let host_unconnected = create(xvcmgmt::HOST_VM, [0x32; 16]);
+    assert_eq!(sync_fail(xvcmgmt::IOCTL_SHUTDOWN, &host_unconnected.to_le_bytes(), &mut []), STATUS_NOT_IMPLEMENTED, "non-loopback checked before connected state");
+    assert_eq!(sync_fail(xvcmgmt::IOCTL_RECEIVE, &lone.to_le_bytes(), &mut []), xvcmgmt::STATUS_BUFFER_TOO_SMALL, "RECEIVE out == 0");
+}
+
+#[test]
+fn send_scatter_and_zero_length_entries() {
+    setup();
+    let svc = [0x41u8; 16];
+    let server = create(xvcmgmt::LOOPBACK_VM, svc);
+    let a = create(xvcmgmt::LOOPBACK_VM, svc);
+    assert_eq!(pend(xvcmgmt::IOCTL_LISTEN, server, &mut []).wait(5000), Some((0, 0)));
+    let mut accepted = [0u8; 8];
+    let mut acc = Call::new();
+    assert_eq!(acc.run(xvcmgmt::IOCTL_ACCEPT, &server.to_le_bytes(), &mut accepted), xvcmgmt::STATUS_PENDING);
+    assert_eq!(pend(xvcmgmt::IOCTL_CONNECT, a, &mut []).wait(5000), Some((0, 0)));
+    assert_eq!(acc.wait(5000), Some((0, 8)));
+    let b = u64::from_le_bytes(accepted);
+
+    let (p1, p2) = (b"head".to_vec(), b"tail!".to_vec());
+    let (st, c) = send_entries(a, &[(&p1, 4), (&p2, 5)]);
+    assert_eq!(st, 0);
+    assert_eq!(c.wait(0), Some((0, 0)), "SEND completes synchronously, Information 0");
+    let mut buf = [0u8; 32];
+    assert_eq!(pend(xvcmgmt::IOCTL_RECEIVE, b, &mut buf).wait(5000), Some((0, 9)));
+    assert_eq!(&buf[..9], b"headtail!");
+
+    let mut c = Call::new();
+    let mut inb = a.to_le_bytes().to_vec();
+    inb.extend_from_slice(&(p1.as_ptr() as u64).to_le_bytes());
+    inb.extend_from_slice(&4u32.to_le_bytes());
+    inb.extend_from_slice(&(p2.as_ptr() as u64).to_le_bytes());
+    inb.extend_from_slice(&0u32.to_le_bytes());
+    assert_eq!(c.run(xvcmgmt::IOCTL_SEND, &inb, &mut []), xvcmgmt::STATUS_INVALID_PARAMETER, "a zero-length scatter entry fails the whole send");
+    assert!(c.untouched());
+    let r = pend(xvcmgmt::IOCTL_RECEIVE, b, &mut buf);
+    assert_eq!(r.wait(150), None, "nothing from the rejected send was delivered");
+    assert_eq!(Call::new().run(xvcmgmt::IOCTL_CLOSE, &b.to_le_bytes(), &mut []), 0);
+    assert_eq!(r.wait(5000).map(|x| x.0), Some(xvcmgmt::STATUS_CANCELLED));
+    for id in [a, server] {
+        Call::new().run(xvcmgmt::IOCTL_CLOSE, &id.to_le_bytes(), &mut []);
+    }
+}
+
+#[test]
+fn client_flow_against_the_emulated_host() {
+    setup();
+    let other = create(xvcmgmt::HOST_VM, [0x77; 16]);
+    assert_eq!(pend(xvcmgmt::IOCTL_CONNECT, other, &mut []).wait(5000), Some((xvcmgmt::STATUS_CONNECTION_REFUSED, 0)), "an unknown host service completes refused, it does not hang");
+    let q = create(xvcmgmt::HOST_VM, claims::launch_instance());
+    assert_eq!(pend(xvcmgmt::IOCTL_CONNECT, q, &mut []).wait(5000), Some((0, 0)));
+    let before = xvcmgmt::host_connections(claims::launch_instance());
+    let mut frame = vec![0u8; 0x10];
+    frame[8..12].copy_from_slice(&1u32.to_le_bytes());
+    frame[12..16].copy_from_slice(&4u32.to_le_bytes());
+    frame.extend_from_slice(b"ping");
+    let (st, c) = send_entries(q, &[(&frame, frame.len() as u32)]);
+    assert_eq!(st, 0);
+    assert_eq!(c.wait(0), Some((0, 0)));
+    let mut rx = [0u8; 0x4000];
+    let r = pend(xvcmgmt::IOCTL_RECEIVE, q, &mut rx);
+    assert_eq!(r.wait(300), None, "the emulated host never answers on its own");
+    let id = *before.last().unwrap();
+    assert_eq!(xvcmgmt::host_take_received(id), frame);
+    let log = std::fs::read_to_string(std::path::PathBuf::from(std::env::var("TOMBOX_LOG").unwrap())).unwrap_or_default();
+    assert!(log.contains("emulated host endpoint"), "the swallowed send is logged: {log}");
+    assert_eq!(sync_fail(xvcmgmt::IOCTL_SHUTDOWN, &q.to_le_bytes(), &mut []), STATUS_NOT_IMPLEMENTED);
+    assert_eq!(Call::new().run(xvcmgmt::IOCTL_CLOSE, &q.to_le_bytes(), &mut []), 0);
+    assert_eq!(r.wait(5000).map(|x| x.0), Some(xvcmgmt::STATUS_CANCELLED));
+}

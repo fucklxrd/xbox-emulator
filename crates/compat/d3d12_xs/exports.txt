@@ -1,19 +1,19 @@
 1 D3D12ZeroMemoryX implemented | console validation (16-byte aligned ranges, scratch >= 64 KiB command / 256 B fence); flags bit 0 or CPU VAs >= 1 TiB zeroed by CPU, GPU VAs zeroed by a copy-queue fill on the owning resource's device, DMA packets written to the caller's command scratch
 2 GetFrameBufferPreserveMemorySizeBytes implemented | returns the size recorded by D3D12ConfigureVirtualMemoryX
 3 PixGetPixieEntryPoints implemented | src/kmd10.rs: console table (E_POINTER on null, caller size dword copied, min(size,0x100) bytes; 19041 build 0xf0 / 29 entries) of the console's XgsKmd10 IOCTL wrappers with their arg checks, NtDirectGraphicsCall path and driver-absent failure codes
-4 D3D10CreateBlob implemented | code thunk, not a PE forwarder: host d3dcompiler_47.dll D3DCreateBlob (console calls the xgs12 UMDCreateBlob, same ID3DBlob object)
+4 D3D10CreateBlob forwarded | host d3dcompiler_47.dll D3DCreateBlob (console calls the xgs12 UMDCreateBlob, same ID3DBlob object)
 5 D3D12ConfigureVirtualMemoryX implemented | console flag/page-table checks, XMem graphics configuration registered
-6 D3D12CreateDevice implemented | console 0x1680: builds the default 0x48-byte creation parameters (version 0x20004, ProcessDebugFlags from D3D12XboxSetProcessDebugFlags, -1 at +8/+0x18/+0x1c), ignores the feature level and calls D3D12XboxCreateDevice, so the device is the same wrapped Scarlett device; create_device_tests
+6 D3D12CreateDevice implemented | console 0x1680 (19041 build 0x1790): builds the default creation parameters for the title console OS build (console_os_build, as kernel32legacy_19041 routing): 0x48 bytes version 0x20004 on 22000+, 0x40 bytes version 0x20002 on 19041; ProcessDebugFlags at +4, -1 at +8/+0x18/+0x1c; ignores the feature level and calls D3D12XboxCreateDevice, so the device is the same wrapped Scarlett device; create_device_tests
 7 D3D12CreateRootSignatureDeserializer implemented | code thunk, not a PE forwarder: host d3d12.dll (console calls xgs12 UMDCreateRootSignatureDeserializer, same interface)
 8 D3D12CreateVersionedRootSignatureDeserializer implemented | code thunk, not a PE forwarder: host d3d12.dll (console calls xgs12 UMDCreateVersionedRootSignatureDeserializer)
-9 D3D12GetDebugInterface implemented | code thunk, not a PE forwarder: host d3d12.dll; same ID3D12Debug IID
+9 D3D12GetDebugInterface forwarded | host d3d12.dll; same ID3D12Debug IID
 10 D3D12SerializeRootSignature implemented | code thunk, not a PE forwarder: host d3d12.dll
 11 D3D12SerializeVersionedRootSignature implemented | code thunk, not a PE forwarder: host d3d12.dll
 12 D3D12UploadCustomMicrocodeX implemented | src/kmd10.rs: console E_INVALIDARG on any zero arg, 0x38-byte packet to IOCTL 0x7900c223 (direct call or cached XgsKmd10 handle), any failure E_FAIL
 13 D3D12XboxCreateDevice implemented | console 0x14e0: NULL parameters -> E_INVALIDARG before anything else, then *ppDevice cleared; host D3D12 device wrapped in the Scarlett vtable layer; create_device_tests
 14 D3D12XboxEnableMemoryProfiling implemented | src/kmd10.rs: console opens XgsKmd10 with handshake (open HRESULT on failure), then IOCTL 0x7900c1cc with the three u64 args, HRESULT_FROM_WIN32 on failure
 15 D3D12XboxGetProcessDebugFlags implemented
-16 D3D12XboxSetProcessDebugFlags implemented | console 0x1010: stores flags & 0x83f00001, returns S_OK; the stored flags select the debug driver / PC debug layer at the next device creation
+16 D3D12XboxSetProcessDebugFlags implemented | console 0x1010 (19041 build 0x1280): stores flags & 0x83f00001 on OS build 22000+, flags & 0x81f00001 on 19041 (title console OS build), returns S_OK; the stored flags select the debug driver / PC debug layer at the next device creation; tests/process_debug_19041.rs
 17 D3D12XboxUnloadDriverModule implemented | console 0x1710: if the driver module is loaded, FreeLibrary it and zero the driver state; here FreeLibrary on the xgs12 driver module this runtime loaded (driver_state OWNED) and clear it, nothing when none is loaded
 18 D3DFlushEntireCpuCache implemented | full fence + FlushProcessWriteBuffers: PC CPU-visible heaps are coherent, so draining every core's store buffer is the visible effect of the console cache flush
 19 DXGIXGetFrameStatistics stub | fixed failure, no work done: console returns DXGI_ERROR_UNSUPPORTED (0x887a0004) unconditionally

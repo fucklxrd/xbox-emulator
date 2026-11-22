@@ -1,6 +1,6 @@
-1 DllCanUnloadNow implemented | code thunk, not a PE forwarder: PC mfh264enc.dll DllCanUnloadNow (console 0x15a0: S_FALSE while factories or objects are alive)
-2 DllGetClassObject implemented | code thunk, not a PE forwarder: PC mfh264enc.dll DllGetClassObject; console 0x15c0 clears *ppv and hands out a CLSID-carrying factory, the same code as the PC encoder
+1 DllCanUnloadNow forwarded | PC mfh264enc.dll DllCanUnloadNow (console 0x15a0: S_FALSE while factories or objects are alive)
+2 DllGetClassObject forwarded | PC mfh264enc.dll DllGetClassObject; console 0x15c0 clears *ppv and hands out a CLSID-carrying factory, the same code as the PC encoder
 3 DllMain implemented | console 0xc630: DisableThreadLibraryCalls on DLL_PROCESS_ATTACH, returns TRUE
 4 DllRegisterServer implemented | console 0x1680: returns S_OK without registering
 5 DllUnregisterServer implemented | console 0x1680 (shared with DllRegisterServer): returns S_OK
-6 MFDllGetClassObject implemented | code thunk, not a PE forwarder: console exports it at the DllGetClassObject address (0x15c0); forwarded to PC mfh264enc.dll DllGetClassObject
+6 MFDllGetClassObject forwarded | console exports it at the DllGetClassObject address (0x15c0); forwarded to PC mfh264enc.dll DllGetClassObject

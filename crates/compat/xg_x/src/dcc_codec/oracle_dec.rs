@@ -288,6 +288,7 @@ fn oracle_xgx_dcc_decode_export_shim() {
     let cdec: DecF = unsafe { core::mem::transmute(or.f("XGDecodeDCC")) };
     let mut r = Rng(0x5a1d_dec0_9e11);
     let cfg = super::tests::configs();
+    let mut skips: std::collections::BTreeMap<String, usize> = Default::default();
     let (mut cases_n, mut blocks, mut same_hr, mut rejected, mut setup_rej) = (0usize, 0usize, 0usize, 0usize, 0usize);
     for _ in 0..6000 {
         let (f, tm) = shim_format(&mut r, &cfg);
@@ -308,6 +309,12 @@ fn oracle_xgx_dcc_decode_export_shim() {
         if nh != 0 && f > 0 && f <= 0x78 && ours(f, tm, p).1 == 0 {
             rejected += 1;
             assert_eq!(nh, super::E_INVALIDARG);
+            let mut runs = run::setup_runs(f, tm, p, &sc).unwrap();
+            let (mut scratch_out, mut notes) = (vec![0u8; n * 256], Vec::new());
+            match run::decode_blocks(&mut runs, &src, &meta, &mut scratch_out, &mut notes) {
+                run::Outcome::Stopped { why, .. } => *skips.entry(why).or_default() += 1,
+                run::Outcome::Done => panic!("native rejected fmt {f} tile {tm} without a codec stop"),
+            }
             continue;
         }
         let mut cd = vec![0x3cu8; n * 256];
@@ -321,10 +328,16 @@ fn oracle_xgx_dcc_decode_export_shim() {
         blocks += n;
     }
     println!("xg_x dcc decode export shim: {} cases, {} compared with console XGDecodeDCC ({} decoded blocks, {} argument/setup rejections with equal HRESULT), 0 mismatches; {} native E_INVALIDARG for console faults or undefined output (console not called)", cases_n, same_hr, blocks, setup_rej, rejected);
+    for (w, k) in &skips {
+        println!("xg_x dcc decode export shim skip: {k} cases: {w}");
+        assert!(PROVEN.iter().any(|p| w.contains(p)), "unproven skip reason: {w}");
+    }
     assert!(same_hr > 4000);
 }
 
-fn child_exit(test: &str, var: &str, i: usize) -> u32 {
+pub(super) const PROVEN: [&str; 5] = ["bytes per element / 4", "/GS cookie", "never wrote", "overruns the console's 256-byte heap output surface", "walks past sector 3 after its stack arguments were overwritten and reads outside"];
+
+pub(super) fn child_exit(test: &str, var: &str, i: usize) -> u32 {
     let exe = std::env::current_exe().unwrap();
     let st = std::process::Command::new(&exe)
         .args([test, "--exact", "--test-threads=1", "--nocapture"])

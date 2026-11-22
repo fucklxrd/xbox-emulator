@@ -118,6 +118,7 @@ pub unsafe extern "system" fn reg_delete_key_w(h: usize, sub: *const u16) -> u32
     if let Some((parent, leaf)) = l.rsplit_once('\\') {
         if let Some(pk) = s.keys.get_mut(parent) {
             pk.subkeys.remove(leaf);
+            pk.written = crate::registry::now();
         }
     }
     s.save();

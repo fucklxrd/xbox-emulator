@@ -275,6 +275,7 @@ fn split_console_address_matches_console_rules() {
 
 #[test]
 fn remote_console_address_fails_could_not_connect_without_socket() {
+    let _g = guard();
     load_xbtp();
     unsafe {
         let (hr, c) = Client::create("10.255.0.7");
@@ -291,10 +292,9 @@ fn remote_console_address_fails_could_not_connect_without_socket() {
 
 static FALLBACK_SEEN: Mutex<Vec<(u32, String)>> = Mutex::new(Vec::new());
 
-unsafe fn record_op(op: u32, session: usize, received: usize) -> String {
+unsafe fn record_op(op: u32, _session: usize, received: usize) -> String {
     let text = xtfmsg::fixture::json_text(received as Obj).unwrap_or_default();
     FALLBACK_SEEN.lock().unwrap().push((op, text.clone()));
-    let _ = session;
     text
 }
 
@@ -443,8 +443,7 @@ fn client_end_to_end_streams_debug_strings_from_spawned_child() {
 
 unsafe fn raw_open(port: u32) -> Com {
     let f: OpenSessionEx2Fn = core::mem::transmute(xtfmsg::xbtp::proc(b"XbtpOpenSessionEx2\0").unwrap());
-    let mut o = OpenSessionOptions { size: 0x58, session_key: [0; 0x20], skip_ready_check: 0, allow_unneeded_key: 0, quiet: 1, reserved: 0, timeout_ms: 5000 };
-    o.quiet = 1;
+    let o = OpenSessionOptions { size: 0x58, session_key: [0; 0x20], skip_ready_check: 0, allow_unneeded_key: 0, quiet: 1, reserved: 0, timeout_ms: 5000 };
     let host = wide("127.0.0.1");
     let mut s = Com::null();
     assert_eq!(f(host.as_ptr(), port, &o, &DEBUG_MONITOR_EXTENSION_ID, &xtfmsg::com::IID_XBTP_CLIENT_SESSION, s.put()), S_OK);
@@ -465,7 +464,6 @@ fn raw_session_monitor_process_reports_create_and_exit_of_spawned_child() {
         let req = xtfmsg::fixture::message_with_json(&format!("{{\"ProcessId\":{pid},\"FilterFlags\":{flags}}}"));
         let mut ex = 0u32;
         assert_eq!(com::client_session::send_begin_message(s.get(), crate::server::OP_MONITOR_PROCESS, req.get(), &mut ex), S_OK);
-        let mut msgs: Vec<String> = Vec::new();
         let next = |what: &str| -> (i16, i32, String) {
             let deadline = Instant::now() + Duration::from_secs(30);
             loop {
@@ -487,7 +485,6 @@ fn raw_session_monitor_process_reports_create_and_exit_of_spawned_child() {
         assert!(attach.contains("\"AttachResult\":0"), "{attach}");
         let (_, _, created) = next("create process event");
         assert!(created.contains("\"EventCode\":3") && created.contains(&format!("\"ProcessId\":{pid}")), "{created}");
-        msgs.push(created);
         let _ = child.0.kill();
         let (t, _, exited) = next("exit process event");
         assert_eq!(t, XBTP_MESSAGE_TYPE_MORE);
@@ -510,7 +507,6 @@ fn raw_session_monitor_process_reports_create_and_exit_of_spawned_child() {
             }
         }
         assert_eq!(tail.last().unwrap().1, 0);
-        let _ = msgs;
         drop(s);
         drop(d);
     }

@@ -111,10 +111,21 @@ pub extern "system" fn D3D12XboxCreateDevice(
         record(M, "D3D12XboxCreateDevice", "null parameters -> E_INVALIDARG");
         return E_INVALIDARG;
     }
-    if pp_device.is_null() {
-        return S_FALSE;
-    }
+    let mut local: *mut c_void = core::ptr::null_mut();
+    let caller_out = pp_device;
+    let pp_device: *mut *mut c_void = if caller_out.is_null() { &mut local } else { caller_out };
     unsafe { *pp_device = core::ptr::null_mut() };
+    let hr = create_device_into(adapter, params, riid, pp_device);
+    if caller_out.is_null() && !local.is_null() {
+        unsafe {
+            let rel: unsafe extern "system" fn(*mut c_void) -> u32 = core::mem::transmute(*(*(local as *const *const usize)).add(2));
+            rel(local);
+        }
+    }
+    hr
+}
+
+fn create_device_into(adapter: *mut c_void, params: *const c_void, riid: *const c_void, pp_device: *mut *mut c_void) -> i32 {
     let xone = unsafe { core::slice::from_raw_parts(params as *const u8, XONE_PARAMS_BYTES) };
     let xs_params = scarlett_params(xone);
     DEBUG_FLAGS.store(xs_params[1], Ordering::Relaxed);
@@ -260,8 +271,23 @@ mod tests {
     fn create_device_rejects_null_parameters() {
         let mut p: *mut c_void = core::ptr::null_mut();
         assert_eq!(D3D12XboxCreateDevice(core::ptr::null_mut(), core::ptr::null(), core::ptr::null(), &mut p), E_INVALIDARG);
-        let params = [0u8; 0x28];
-        assert_eq!(D3D12XboxCreateDevice(core::ptr::null_mut(), params.as_ptr() as *const c_void, core::ptr::null(), core::ptr::null_mut()), S_FALSE);
+    }
+
+    #[test]
+    fn create_device_null_out_returns_the_creation_result_like_console() {
+        let params = default_xone_params(0);
+        let iid: [u32; 4] = [0x1898_19f1, 0x4b57_1db6, 0x2118_54be, 0xf785_9b33];
+        let hr_null = D3D12XboxCreateDevice(core::ptr::null_mut(), params.as_ptr() as *const c_void, iid.as_ptr() as *const c_void, core::ptr::null_mut());
+        let mut p: *mut c_void = core::ptr::null_mut();
+        let hr = D3D12XboxCreateDevice(core::ptr::null_mut(), params.as_ptr() as *const c_void, iid.as_ptr() as *const c_void, &mut p);
+        assert_ne!(hr_null, S_FALSE);
+        assert_eq!(hr_null, hr);
+        if !p.is_null() {
+            unsafe {
+                let rel: unsafe extern "system" fn(*mut c_void) -> u32 = core::mem::transmute(*(*(p as *const *const usize)).add(2));
+                rel(p);
+            }
+        }
     }
 
     #[test]

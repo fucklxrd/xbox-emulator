@@ -119,20 +119,34 @@ extern "system" {
     fn SetWindowLongPtrW(h: *mut c_void, i: i32, v: isize) -> isize;
 }
 
-unsafe fn window_long_get(h: *mut c_void, i: i32) -> isize {
-    if IsWindowUnicode(h) != 0 {
-        GetWindowLongPtrW(h, i)
-    } else {
-        GetWindowLongPtrA(h, i)
+pub const GWLP_WNDPROC: i32 = -4;
+pub const GWLP_USERDATA: i32 = -21;
+const ERROR_INVALID_PARAMETER: u32 = 87;
+
+pub fn window_long_index_ok(i: i32) -> bool {
+    i >= 0 || i == GWLP_USERDATA || i == GWLP_WNDPROC
+}
+
+unsafe fn window_long_call(i: i32, f: impl FnOnce() -> isize) -> isize {
+    if !window_long_index_ok(i) {
+        SetLastError(ERROR_INVALID_PARAMETER);
+        return 0;
     }
+    SetLastError(0);
+    let r = f();
+    if r == 0 && GetLastError() != 0 {
+        return 0;
+    }
+    SetLastError(0);
+    r
+}
+
+unsafe fn window_long_get(h: *mut c_void, i: i32) -> isize {
+    window_long_call(i, || if IsWindowUnicode(h) != 0 { GetWindowLongPtrW(h, i) } else { GetWindowLongPtrA(h, i) })
 }
 
 unsafe fn window_long_set(h: *mut c_void, i: i32, v: isize) -> isize {
-    if IsWindowUnicode(h) != 0 {
-        SetWindowLongPtrW(h, i, v)
-    } else {
-        SetWindowLongPtrA(h, i, v)
-    }
+    window_long_call(i, || if IsWindowUnicode(h) != 0 { SetWindowLongPtrW(h, i, v) } else { SetWindowLongPtrA(h, i, v) })
 }
 
 #[no_mangle]

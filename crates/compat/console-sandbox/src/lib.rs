@@ -31,9 +31,6 @@ unsafe extern "system" fn nt_close(h: usize) -> i32 {
     if registry::close(h) {
         0
     } else {
-        if xvcmgmt::is_device(h) {
-            xvcmgmt::forget(h);
-        }
         NtClose(h)
     }
 }

@@ -81,7 +81,10 @@ unsafe extern "system" fn delayed_cb(ctx: *mut c_void, canceled: bool) {
     push(ctx as usize, if canceled { "delayed canceled" } else { "delayed ran" });
 }
 
+static TERM_THREAD: Mutex<Option<std::thread::ThreadId>> = Mutex::new(None);
+
 unsafe extern "system" fn terminated(ctx: *mut c_void) {
+    *TERM_THREAD.lock().unwrap_or_else(|e| e.into_inner()) = Some(std::thread::current().id());
     push(ctx as usize, "terminated");
 }
 
@@ -133,6 +136,7 @@ fn waiting_terminate_cancels_delayed_and_drains_thread_pool_before_callback() {
         let t0 = Instant::now();
         assert_eq!((t.terminate)(t.o, q, true, tag as *mut c_void, terminated), 0);
         assert!(t0.elapsed() >= Duration::from_millis(150), "terminate(wait) returned before the in-flight callback finished");
+        assert_ne!(*TERM_THREAD.lock().unwrap(), Some(std::thread::current().id()), "termination callback ran on the calling thread, not the completion port");
         let e = events(tag);
         assert_eq!(e.last(), Some(&"terminated"), "{e:?}");
         assert_eq!(e.iter().filter(|s| **s == "delayed canceled").count(), 2, "{e:?}");
@@ -181,13 +185,20 @@ fn composite_terminate_cancels_only_its_own_pending_callbacks() {
         assert_eq!((t.submit)(t.o, comp, 0, 0x6001 as *mut c_void, record), 0);
         assert_eq!((t.delayed)(t.o, comp, 0, 5000, 0x6001 as *mut c_void, record), 0);
         assert_eq!((t.submit)(t.o, q, 0, 0x6002 as *mut c_void, record), 0);
-        assert_eq!((t.terminate)(t.o, comp, true, 0x6003 as *mut c_void, terminated), 0);
-        assert_eq!(events(0x6001), ["canceled", "canceled"]);
-        assert_eq!(events(0x6003), ["terminated"]);
-        assert!(events(0x6002).is_empty());
+        assert_eq!((t.terminate)(t.o, comp, false, 0x6003 as *mut c_void, terminated), 0);
+        assert!(events(0x6001).is_empty(), "canceled callbacks ran inline inside terminate: {:?}", events(0x6001));
         assert_eq!((t.submit)(t.o, comp, 0, 0x6001 as *mut c_void, record), E_ABORT);
-        assert!((t.dispatch)(t.o, q, 0, 0));
+        for _ in 0..8 {
+            (t.dispatch)(t.o, q, 0, 0);
+            (t.dispatch)(t.o, q, 1, 0);
+        }
+        assert_eq!(events(0x6001), ["canceled", "canceled"]);
         assert_eq!(events(0x6002), ["ran"]);
+        assert_eq!(events(0x6003), ["terminated"]);
+        let all = LOG.lock().unwrap().clone();
+        let last_cancel = all.iter().rposition(|e| e.0 == 0x6001).unwrap();
+        let term = all.iter().position(|e| e.0 == 0x6003).unwrap();
+        assert!(term > last_cancel, "{all:?}");
         (t.close)(t.o, comp);
         (t.close)(t.o, q);
     }
@@ -244,5 +255,94 @@ fn consumable_fulfillment_over_balance_reports_insufficient_quantity() {
         let mut b = Box::new(Block { queue: 0, context: 0, callback: 0, internal: [0; 32] });
         assert_eq!(fulfill(o, 1, id.as_ptr(), 5, core::ptr::null(), &mut *b), 0);
         assert_eq!(status(xa, &mut *b, true), store::E_GAMESTORE_INSUFFICIENT_QUANTITY);
+    }
+}
+
+#[test]
+fn waiting_terminate_on_manual_queue_delivers_through_the_completion_dispatcher() {
+    let _g = SERIAL.lock().unwrap_or_else(|e| e.into_inner());
+    unsafe {
+        let t = tq();
+        let mut q = 0usize;
+        assert_eq!((t.create)(t.o, 0, 0, &mut q), 0);
+        assert_eq!((t.submit)(t.o, q, 1, 0x7001 as *mut c_void, record), 0);
+        let (o, dispatch, qh) = (t.o as usize, t.dispatch, q);
+        let stop = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let s2 = stop.clone();
+        let pump = std::thread::spawn(move || {
+            let id = std::thread::current().id();
+            while !s2.load(std::sync::atomic::Ordering::Acquire) {
+                dispatch(o as *mut c_void, qh, 0, 10);
+                dispatch(o as *mut c_void, qh, 1, 10);
+            }
+            id
+        });
+        assert_eq!((t.terminate)(t.o, q, true, 0x7002 as *mut c_void, terminated), 0);
+        stop.store(true, std::sync::atomic::Ordering::Release);
+        let pump_id = pump.join().unwrap();
+        assert_eq!(events(0x7001), ["canceled"]);
+        assert_eq!(events(0x7002), ["terminated"]);
+        assert_eq!(*TERM_THREAD.lock().unwrap(), Some(pump_id));
+        (t.close)(t.o, q);
+    }
+}
+
+#[test]
+fn process_queue_and_null_handle_cannot_be_terminated() {
+    let _g = SERIAL.lock().unwrap_or_else(|e| e.into_inner());
+    unsafe {
+        let t = tq();
+        let (_, getp) = method(xasync::XASYNC, xasync::XASYNC, 25);
+        let getp: unsafe extern "system" fn(*mut c_void, *mut usize) -> bool = core::mem::transmute(getp);
+        let mut p = 0usize;
+        assert!(getp(t.o, &mut p));
+        let denied = 0x8007_0005u32 as i32;
+        assert_eq!((t.terminate)(t.o, 0, false, 0x8001 as *mut c_void, terminated), denied);
+        assert_eq!((t.terminate)(t.o, p, false, 0x8001 as *mut c_void, terminated), denied);
+        assert!(events(0x8001).is_empty());
+        let bogus = Box::new([0u64; 8]);
+        assert_eq!((t.terminate)(t.o, bogus.as_ptr() as usize, false, 0x8001 as *mut c_void, terminated), gdk::E_INVALIDARG);
+        (t.close)(t.o, p);
+    }
+}
+
+#[test]
+fn unowned_licenses_are_returned_invalid_not_failed() {
+    env();
+    unsafe {
+        let (o, acq) = method(store::CLSID, store::IID, 20);
+        let acq: unsafe extern "system" fn(*mut c_void, usize, *const u8, *mut Block) -> i32 = core::mem::transmute(acq);
+        let (_, res) = method(store::CLSID, store::IID, 21);
+        let res: unsafe extern "system" fn(*mut c_void, *mut Block, *mut usize) -> i32 = core::mem::transmute(res);
+        let (_, valid) = method(store::CLSID, store::IID, 22);
+        let valid: unsafe extern "system" fn(*mut c_void, usize) -> bool = core::mem::transmute(valid);
+        let (_, close) = method(store::CLSID, store::IID, 23);
+        let close: unsafe extern "system" fn(*mut c_void, usize) = core::mem::transmute(close);
+        let (o2, durable) = method(store::CLSID, store::IID_V2, 71);
+        let durable: unsafe extern "system" fn(*mut c_void, usize, *const u8, *mut Block) -> i32 = core::mem::transmute(durable);
+        let (xa, status) = method(xasync::XASYNC, xasync::XASYNC, 3);
+        let status: unsafe extern "system" fn(*mut c_void, *mut Block, bool) -> i32 = core::mem::transmute(status);
+        let mut b = Box::new(Block { queue: 0, context: 0, callback: 0, internal: [0; 32] });
+        assert_eq!(acq(o, 1, b"Not.Owned.Package_1.0.0.0_x64__abc\0".as_ptr(), &mut *b), 0);
+        assert_eq!(status(xa, &mut *b, true), 0);
+        let mut l = 0usize;
+        assert_eq!(res(o, &mut *b, &mut l), 0);
+        assert_ne!(l, 0);
+        assert!(!valid(o, l));
+        close(o, l);
+        let mut b = Box::new(Block { queue: 0, context: 0, callback: 0, internal: [0; 32] });
+        assert_eq!(durable(o2, 1, b"9TOMBOXNOTOWNED\0".as_ptr(), &mut *b), 0);
+        assert_eq!(status(xa, &mut *b, true), 0);
+        let mut l = 0usize;
+        assert_eq!(res(o, &mut *b, &mut l), 0);
+        assert!(!valid(o, l));
+        close(o, l);
+        let (_, install) = method(store::CLSID, store::IID, 62);
+        let install: unsafe extern "system" fn(*mut c_void, usize, *const *const u8, usize, *mut Block) -> i32 = core::mem::transmute(install);
+        let id = b"9TOMBOXNOTOWNED\0";
+        let ids = [id.as_ptr()];
+        let mut b = Box::new(Block { queue: 0, context: 0, callback: 0, internal: [0; 32] });
+        assert_eq!(install(o, 1, ids.as_ptr(), 1, &mut *b), 0);
+        assert_eq!(status(xa, &mut *b, true), store::E_NOT_FOUND);
     }
 }

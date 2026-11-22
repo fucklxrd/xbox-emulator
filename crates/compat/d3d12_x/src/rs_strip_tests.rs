@@ -100,3 +100,34 @@ fn xbox_one_params_translate_to_scarlett_layout() {
     assert_eq!(&s[1..10], &[0x0010_0001, u32::MAX, 0, 0, 0, u32::MAX, u32::MAX, 0x5a, 0]);
     assert!(s[10..].iter().all(|&w| w == 0));
 }
+
+#[test]
+fn versioned_deserializer_restores_xbox_flags_at_every_version() {
+    let v = Versioned { version: 2, desc: Desc { num_params: 0, params: core::ptr::null(), num_samplers: 0, samplers: core::ptr::null(), flags: ALLOW_IA | XBOX_ROOT_FLAGS } };
+    let (mut blob, mut err): (*mut c_void, *mut c_void) = (core::ptr::null_mut(), core::ptr::null_mut());
+    let hr = crate::D3D12SerializeVersionedRootSignature(&v as *const Versioned as *const c_void, &mut blob, &mut err);
+    assert!(hr >= 0, "hr={hr:#010x}");
+    let bytes = unsafe { blob_bytes(blob) };
+    let iid: [u32; 4] = [0x7f91_ce67, 0x4bb7_090c, 0x8fed_8eb7, 0xa01d_e3f2];
+    let mut de: *mut c_void = core::ptr::null_mut();
+    let hr = crate::D3D12CreateVersionedRootSignatureDeserializer(bytes.as_ptr() as *const c_void, bytes.len(), iid.as_ptr() as *const c_void, &mut de);
+    assert!(hr >= 0, "deserializer hr={hr:#010x}");
+    let at_version: unsafe extern "system" fn(*mut c_void, u32, *mut *const Versioned) -> i32 = unsafe { core::mem::transmute(vslot(de, 3)) };
+    let mut checked = 0;
+    for ver in [1u32, 2] {
+        let mut d: *const Versioned = core::ptr::null();
+        let hr = unsafe { at_version(de, ver, &mut d) };
+        assert!(hr >= 0 && !d.is_null(), "version {ver} hr={hr:#010x}");
+        assert_eq!(unsafe { (*d).version }, ver);
+        assert_eq!(unsafe { (*d).desc.flags }, ALLOW_IA | XBOX_ROOT_FLAGS, "version {ver}");
+        checked += 1;
+    }
+    let unconverted: unsafe extern "system" fn(*mut c_void) -> *const Versioned = unsafe { core::mem::transmute(vslot(de, 4)) };
+    assert_eq!(unsafe { (*unconverted(de)).desc.flags }, ALLOW_IA | XBOX_ROOT_FLAGS);
+    assert_eq!(checked, 2);
+    unsafe {
+        release(de);
+        release(blob);
+        release(err);
+    }
+}

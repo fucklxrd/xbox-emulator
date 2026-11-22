@@ -116,6 +116,22 @@ pub unsafe fn deserializer(f: DeserializerFn, versioned: bool, data: *const c_vo
             let p = unsafe { desc.add(at) } as *mut u32;
             unsafe { core::ptr::write_unaligned(p, core::ptr::read_unaligned(p) | xbox) };
         }
+        if versioned {
+            unsafe { restore_versions(o, xbox) };
+        }
     }
     hr
+}
+
+pub const ROOT_SIGNATURE_VERSIONS: [u32; 3] = [1, 2, 3];
+
+unsafe fn restore_versions(o: *mut c_void, xbox: u32) {
+    let at_version: unsafe extern "system" fn(*mut c_void, u32, *mut *const u8) -> i32 = unsafe { core::mem::transmute(vslot(o, 3)) };
+    for v in ROOT_SIGNATURE_VERSIONS {
+        let mut desc: *const u8 = core::ptr::null();
+        if unsafe { at_version(o, v, &mut desc) } >= 0 && !desc.is_null() {
+            let p = unsafe { desc.add(VERSIONED_DESC_FLAGS) } as *mut u32;
+            unsafe { core::ptr::write_unaligned(p, core::ptr::read_unaligned(p) | xbox) };
+        }
+    }
 }

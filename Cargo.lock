@@ -1035,6 +1035,17 @@ name = "xtfcommon"
 version = "0.1.0"
 
 [[package]]
+name = "xtfconsolecontrol"
+version = "0.1.0"
+dependencies = [
+ "compat-common",
+ "console-sandbox",
+ "xbtp",
+ "xtfcommon",
+ "xtfmsg",
+]
+
+[[package]]
 name = "xtfdebugmonitor"
 version = "0.1.0"
 dependencies = [

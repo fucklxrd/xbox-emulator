@@ -126,14 +126,16 @@ pub unsafe extern "system" fn MFStartup(version: u32, flags: u32) -> i32 {
         return compat_common::E_FAIL;
     }
     let f: StartupFn = unsafe { core::mem::transmute(p) };
+    let held = platform::gate();
     let hr = unsafe { f(version, flags) };
     if hr >= 0 && assign_queues_setting().unwrap_or(0) != 0 {
         PRIVATE_WORKQUEUES.store(1, Ordering::SeqCst);
     }
     let n = if hr >= 0 { STARTED.fetch_add(1, Ordering::SeqCst) + 1 } else { STARTED.load(Ordering::SeqCst) };
     if hr >= 0 {
-        platform::on_startup(version, flags);
+        platform::on_startup(&held, version, flags);
     }
+    drop(held);
     if STARTUP_LOGS.fetch_add(1, Ordering::Relaxed) < 16 {
         compat_common::record("mfplat", "MFStartup", &format!("version={version:#x} flags={flags:#x} -> hr={:#010x} startups={n}", hr as u32));
     }
@@ -148,12 +150,14 @@ pub unsafe extern "system" fn MFShutdown() -> i32 {
         return compat_common::E_FAIL;
     }
     let f: ShutdownFn = unsafe { core::mem::transmute(p) };
+    let held = platform::gate();
     let hr = unsafe { f() };
-    let prev = STARTED.fetch_update(Ordering::SeqCst, Ordering::SeqCst, |v| Some((v - 1).max(0))).unwrap_or(0);
-    if prev > 0 {
-        platform::on_shutdown();
+    let prev = if hr >= 0 { STARTED.fetch_update(Ordering::SeqCst, Ordering::SeqCst, |v| Some((v - 1).max(0))).unwrap_or(0) } else { STARTED.load(Ordering::SeqCst) };
+    if hr >= 0 && prev > 0 {
+        platform::on_shutdown(&held);
     }
-    let n = (prev - 1).max(0);
+    drop(held);
+    let n = if hr >= 0 { (prev - 1).max(0) } else { prev };
     if STARTUP_LOGS.fetch_add(1, Ordering::Relaxed) < 16 {
         compat_common::record("mfplat", "MFShutdown", &format!("-> hr={:#010x} startups={n}", hr as u32));
     }

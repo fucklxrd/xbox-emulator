@@ -124,9 +124,15 @@ fn check(d: &std::path::Path) {
         assert_eq!(find(o, id.as_ptr(), 1, [Sel { kind: 1, value: stw.as_ptr() as usize }].as_ptr(), &mut a), 0);
         assert_eq!(a, package::READY);
         let it = CString::new("it-IT").unwrap();
-        assert_eq!(find(o, id.as_ptr(), 1, [Sel { kind: 0, value: it.as_ptr() as usize }].as_ptr(), &mut a), 0);
+        a = 99;
+        assert_eq!(find(o, id.as_ptr(), 1, [Sel { kind: 0, value: it.as_ptr() as usize }].as_ptr(), &mut a), package::E_GAMEPACKAGE_INVALID_SELECTOR);
         assert_eq!(a, package::UNAVAILABLE);
         assert_eq!(package::UNAVAILABLE, 3);
+        let other_pkg = CString::new("Not.This.Package").unwrap();
+        a = 99;
+        assert_eq!(find(o, other_pkg.as_ptr(), 1, [Sel { kind: 2, value: 3 }].as_ptr(), &mut a), gdk::E_NOT_FOUND);
+        assert_eq!(a, package::UNAVAILABLE);
+        assert_eq!(package::FIND_SWALLOWED, [0x8007_0002, 0x8007_0570, 0x8007_01e7]);
         assert_eq!(find(o, id.as_ptr(), 0, core::ptr::null(), &mut a), gdk::E_INVALIDARG);
         assert_eq!(find(o, id.as_ptr(), 1, [Sel { kind: 9, value: 0 }].as_ptr(), &mut a), gdk::E_INVALIDARG);
 

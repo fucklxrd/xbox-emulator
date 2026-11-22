@@ -263,6 +263,7 @@ pub unsafe extern "system" fn nt_query_information_token(h: usize, class: u32, b
     }
     let attrs = match real_attributes(h) {
         Ok(a) => merge(a, emulated()),
+        Err(e) if e == STATUS_INVALID_PARAMETER => return NtQueryInformationToken(h, class, buf, len, ret),
         Err(e) => return e,
     };
     let need = size_of(&attrs);

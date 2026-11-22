@@ -6,6 +6,7 @@ use crate::host::{self, ERROR_INVALID_HANDLE, ERROR_INVALID_PARAMETER, SERVICE_R
 pub const SERVICE_NOTIFY_STATUS_CHANGE: u32 = 2;
 pub const ERROR_SUCCESS: u32 = 0;
 pub const RPCSS: &str = "RpcSs";
+pub const SERVICE_NOTIFY_DELETE_PENDING: u32 = 0x200;
 
 #[link(name = "kernel32")]
 extern "system" {
@@ -108,7 +109,7 @@ unsafe fn fire(buffer: usize, thread: usize, st: &[u32; 7], triggered: u32) -> b
 
 pub unsafe extern "system" fn notify_service_status_change(service: usize, mask: u32, buffer: *mut c_void) -> u32 {
     let Some(name) = host::service_handle_name(service) else { return ERROR_INVALID_HANDLE };
-    if buffer.is_null() || mask == 0 || mask & !0x7f != 0 {
+    if buffer.is_null() || mask == 0 || mask & !(0x7f | SERVICE_NOTIFY_DELETE_PENDING) != 0 {
         return ERROR_INVALID_PARAMETER;
     }
     let b = buffer as *const u8;

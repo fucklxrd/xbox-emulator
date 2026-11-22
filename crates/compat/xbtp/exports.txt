@@ -36,8 +36,8 @@
 36 ?InitializeServer@TcpConnection@@SAJKPEAV?$shared_ptr@VTcpConnection@@@std@@@Z implemented | shared_ptr variant; always wraps
 37 ?InternalLog@@YAXGPEBDPEAD@Z implemented | XtfLogMessage(level,&ctx,0,0,0,fmt,va,0x11) via lazily loaded XtfBaseServices.dll
 38 ?IsExtensionValid@XbtpExtensionRegistry@@QEAA_NAEBU_GUID@@@Z implemented | loaded definitions first, then registered DLLs
-39 ?KdDbgPrint@@YAXPEBD0ZZ implemented | code thunk, not a PE forwarder: asm variadic thunk -> KdDbgPrintV -> ntdll vDbgPrintExWithPrefix
-40 ?KdDbgPrintV@@YAXPEBD0PEAD@Z implemented | code thunk, not a PE forwarder: ntdll vDbgPrintExWithPrefix(prefix,0,0,fmt,va)
+39 ?KdDbgPrint@@YAXPEBD0ZZ forwarded | asm variadic thunk -> KdDbgPrintV -> ntdll vDbgPrintExWithPrefix
+40 ?KdDbgPrintV@@YAXPEBD0PEAD@Z forwarded | ntdll vDbgPrintExWithPrefix(prefix,0,0,fmt,va)
 41 ?LogError@@YAXPEBDZZ implemented | asm variadic thunk, gate XtfLogGetMainLevel>=1, level 2
 42 ?LogErrorV@@YAXPEBDPEAD@Z implemented | gate >=1, level 2
 43 ?LogInfo@@YAXPEBDZZ implemented | asm variadic thunk, gate >=4, level 4

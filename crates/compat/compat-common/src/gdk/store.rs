@@ -495,7 +495,7 @@ unsafe extern "system" fn install_packages_async(_t: This, _ctx: usize, ids: *co
     let mut b = Vec::new();
     for w in &want {
         if !owns(w) {
-            return xasync::run(block, OP_PACKAGES, Payload::status(E_GAMESTORE_LICENSE_ACTION_NOT_APPLICABLE_TO_PRODUCT));
+            return xasync::run(block, OP_PACKAGES, Payload::status(E_NOT_FOUND));
         }
         let pid = if w.eq_ignore_ascii_case(&game_store_id()) { super::package::package_id() } else { w.clone() };
         let mut e = [0u8; 33];
@@ -550,18 +550,12 @@ const LMAGIC: u64 = 0x4C49_4345_4E53_4521;
 
 unsafe extern "system" fn acquire_package_license_async(_t: This, _ctx: usize, package: *const u8, block: *mut c_void) -> i32 {
     let pkg = cstr(package).unwrap_or_default();
-    let p = if pkg == super::package::package_id() || owns(&pkg) {
-        Payload::value(Box::into_raw(Box::new(License { magic: LMAGIC, id: pkg })) as usize)
-    } else {
-        Payload::status(E_GAMESTORE_LICENSE_ACTION_NOT_APPLICABLE_TO_PRODUCT)
-    };
-    xasync::run(block, OP_LICENSE, p)
+    xasync::run(block, OP_LICENSE, Payload::value(Box::into_raw(Box::new(License { magic: LMAGIC, id: pkg })) as usize))
 }
 
 unsafe extern "system" fn acquire_durables_license_async(_t: This, _ctx: usize, id: *const u8, block: *mut c_void) -> i32 {
     let Some(id) = cstr(id) else { return E_INVALIDARG };
-    let p = if owns(&id) { Payload::value(Box::into_raw(Box::new(License { magic: LMAGIC, id })) as usize) } else { Payload::status(E_GAMESTORE_LICENSE_ACTION_NOT_APPLICABLE_TO_PRODUCT) };
-    xasync::run(block, OP_LICENSE, p)
+    xasync::run(block, OP_LICENSE, Payload::value(Box::into_raw(Box::new(License { magic: LMAGIC, id })) as usize))
 }
 
 unsafe extern "system" fn acquire_license_result(_t: This, block: *mut c_void, out: *mut usize) -> i32 {

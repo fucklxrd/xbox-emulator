@@ -93,6 +93,7 @@ fn oracle_xgx_dcc_encode_export_shim() {
     let cenc: EncF = unsafe { core::mem::transmute(or.f("XGEncodeDCC")) };
     let mut r = Rng(0x5a1d_e1c0_7e11);
     let cfg = super::tests::configs();
+    let mut skips: std::collections::BTreeMap<String, usize> = Default::default();
     let (mut cases_n, mut blocks, mut same_hr, mut rejected, mut setup_rej, mut no_sizes) = (0usize, 0usize, 0usize, 0usize, 0usize, 0usize);
     for _ in 0..6000 {
         let (f, tm) = shim_format(&mut r, &cfg);
@@ -112,6 +113,12 @@ fn oracle_xgx_dcc_encode_export_shim() {
         if nh != 0 && f > 0 && f <= 0x78 && ours(f, tm, p).1 == 0 {
             rejected += 1;
             assert_eq!(nh, super::E_INVALIDARG);
+            let mut runs = run::setup_runs(f, tm, p, &sc).unwrap();
+            let (mut a, mut b) = (vec![0u8; n * 256], vec![0u8; n]);
+            match run::encode_blocks(&mut runs, &src, &mut a, &mut b, None) {
+                run::Outcome::Stopped { why, .. } => *skips.entry(why).or_default() += 1,
+                run::Outcome::Done => panic!("native rejected fmt {f} tile {tm} without a codec stop"),
+            }
             continue;
         }
         let (mut cd, mut cm, mut cs) = (vec![0x3cu8; n * 256], vec![0x5au8; n], vec![0xdead_beefu32; n]);
@@ -131,6 +138,10 @@ fn oracle_xgx_dcc_encode_export_shim() {
         blocks += n;
     }
     println!("xg_x dcc encode export shim: {} cases, {} compared with console XGEncodeDCC ({} encoded blocks, {} without a sizes array, {} argument/setup rejections with equal HRESULT), 0 mismatches in HRESULT, data, meta and sizes; {} native E_INVALIDARG for console faults or undefined output (console not called)", cases_n, same_hr, blocks, no_sizes, setup_rej, rejected);
+    for (w, k) in &skips {
+        println!("xg_x dcc encode export shim skip: {k} cases: {w}");
+        assert!(super::oracle_dec::PROVEN.iter().any(|p| w.contains(p)), "unproven skip reason: {w}");
+    }
     assert!(same_hr > 4000);
 }
 
@@ -139,7 +150,7 @@ fn oracle_xgx_dcc_enc_undefined_classes() {
     let Some((_orc, ref or)) = console() else { return };
     let drv: St = unsafe { core::mem::transmute(or.rva(0x189b0)) };
     let mut r = Rng(0x0dd_e1c0);
-    let (mut undef, mut varied, mut faults) = (0usize, 0usize, std::collections::BTreeMap::<&str, usize>::new());
+    let (mut undef, mut varied, mut faults) = (0usize, 0usize, std::collections::BTreeMap::<String, usize>::new());
     for &(f, t, _) in &cases(or) {
         for _ in 0..30 {
             let p = params(&mut r);
@@ -153,7 +164,7 @@ fn oracle_xgx_dcc_enc_undefined_classes() {
             match run::encode_blocks(&mut runs, &s0, &mut dst, &mut meta, None) {
                 run::Outcome::Stopped { why, .. } if why.contains("never wrote") => {}
                 run::Outcome::Stopped { why, .. } => {
-                    *faults.entry(if why.contains("faults") { "fault" } else { "undefined" }).or_default() += 1;
+                    *faults.entry(why).or_default() += 1;
                     continue;
                 }
                 run::Outcome::Done => continue,
@@ -177,4 +188,131 @@ fn oracle_xgx_dcc_enc_undefined_classes() {
     }
     println!("xg_x dcc enc undefined output: {undef} single-block cases where native sees output bytes the console never writes; console driver 0x189b0 output changed with the prefill in {varied} of them; other stops {faults:?}");
     assert_eq!(undef, varied);
+}
+
+fn enc_fault_cases(or: &super::tests::Tm) -> Vec<(i32, i32, [u32; 2], [u8; 256], super::run::Scratch, String)> {
+    let mut v: Vec<(i32, i32, [u32; 2], [u8; 256], super::run::Scratch, String)> = Vec::new();
+    let mut r = Rng(0xe1c_fa17);
+    for &(f, t, _) in &cases(or) {
+        for _ in 0..30 {
+            let p = params(&mut r);
+            let s0 = block(&mut r);
+            let sc = known(&mut r);
+            let mut runs = match run::setup_runs(f, t, p, &sc) {
+                Ok(x) => x,
+                Err(_) => continue,
+            };
+            let (mut dst, mut meta) = ([0u8; 256], [0u8; 1]);
+            if let run::Outcome::Stopped { why, .. } = run::encode_blocks(&mut runs, &s0, &mut dst, &mut meta, None) {
+                if v.iter().filter(|c| c.5 == why).count() < 5 && !v.iter().any(|c| c.5 == why && c.0 == f && c.1 == t) {
+                    v.push((f, t, p, s0, sc, why));
+                }
+            }
+        }
+    }
+    v
+}
+
+#[test]
+fn oracle_xgx_dcc_enc_fault_classes() {
+    if let Ok(i) = std::env::var("XGX_DCC_ENC_CHILD") {
+        let Some((_orc, ref or)) = console() else { std::process::exit(3) };
+        let cenc: EncF = unsafe { core::mem::transmute(or.f("XGEncodeDCC")) };
+        let (f, t, p, s0, sc, _) = enc_fault_cases(or).swap_remove(i.parse::<usize>().unwrap());
+        set_scratch(or, &sc);
+        let (mut out, mut meta, mut size) = ([0u8; 256], [0u8; 1], [0u32; 1]);
+        unsafe { cenc(1, s0.as_ptr(), out.as_mut_ptr(), meta.as_mut_ptr(), size.as_mut_ptr(), f, t, p.as_ptr()) };
+        std::process::exit(0);
+    }
+    let Some((_orc, ref or)) = console() else { return };
+    let fc = enc_fault_cases(or);
+    let mut by: std::collections::BTreeMap<(String, u32), usize> = Default::default();
+    for (i, c) in fc.iter().enumerate() {
+        let code = super::oracle_dec::child_exit("dcc_codec::oracle_enc::oracle_xgx_dcc_enc_fault_classes", "XGX_DCC_ENC_CHILD", i);
+        *by.entry((c.5.clone(), code)).or_default() += 1;
+    }
+    for ((w, code), n) in &by {
+        println!("xg_x dcc enc fault class: {n} child processes running console XGEncodeDCC exited {code:#x}: {w}");
+        if w.contains("bytes per element / 4") {
+            assert_eq!(*code, 0xc000_0094, "{w}");
+        } else if w.contains("walks past sector 3") {
+            assert_eq!(*code, 0xc000_0005, "{w}");
+        } else if w.contains("overruns") {
+            assert!(*code == 0 || *code == 0xc000_0005 || *code == 0xc000_0374, "{w}");
+        } else {
+            panic!("fault class without an expected console exit: {w}");
+        }
+    }
+    assert!(by.keys().any(|k| k.0.contains("bytes per element / 4")) && by.keys().any(|k| k.0.contains("overruns")));
+}
+
+#[test]
+fn oracle_xgx_dcc_enc_stream_overflow_layout() {
+    let Some((_orc, ref or)) = console() else { return };
+    let drv: St = unsafe { core::mem::transmute(or.rva(0x189b0)) };
+    let mut r = Rng(0x0f10_e1c0);
+    let (mut n, mut varied, mut reach) = (0usize, 0usize, 0usize);
+    for &(f, t, _) in &cases(or) {
+        for _ in 0..30 {
+            let p = params(&mut r);
+            let s0 = block(&mut r);
+            let sc = known(&mut r);
+            let Ok(mut runs) = run::setup_runs(f, t, p, &sc) else { continue };
+            let (mut dst, mut meta) = ([0u8; 256], [0u8; 1]);
+            match run::encode_blocks(&mut runs, &s0, &mut dst, &mut meta, None) {
+                run::Outcome::Stopped { why, .. } if why.contains("overruns") => {}
+                _ => continue,
+            }
+            let mut pick = None;
+            for fl in 0..FILLS {
+                let mut nd = fresh(fl, &sc);
+                nd.setup(f, t, p[0], p[1]);
+                nd.s[0] = s0;
+                if let Err(super::Stop::Undef(w)) = enc::run(&mut nd) {
+                    if w.contains("overruns") {
+                        pick = Some(fl);
+                        break;
+                    }
+                }
+            }
+            let Some(fl) = pick else { continue };
+            n += 1;
+            let mut outs = Vec::new();
+            let mut bufs = Vec::new();
+            for lay in 0..3 {
+                let (c, _) = Con::new(or, f, t, p);
+                let mut d = fresh(fl, &sc);
+                d.setup(f, t, p[0], p[1]);
+                prefill(&c, &d);
+                c.set_surf(0, &s0);
+                let mut buf = vec![[0x00u8, 0xff, 0x00][lay]; 0x10000];
+                let s2 = c.get_surf(2);
+                let base = buf.as_mut_ptr();
+                unsafe {
+                    if lay == 0 {
+                        core::ptr::copy_nonoverlapping(s2.as_ptr(), base.add(256), 256);
+                        (c.ptr() as *mut u8).add(0xd8).cast::<*mut u8>().write_unaligned(base.add(256));
+                    }
+                    (c.ptr() as *mut u8).add(0x98).cast::<*mut u8>().write_unaligned(base);
+                }
+                drv(c.ptr());
+                let img = c.image();
+                outs.push((buf[..256].to_vec(), img[0x34]));
+                unsafe {
+                    (c.ptr() as *mut u8).add(0x98).cast::<*mut u8>().write_unaligned(core::ptr::null_mut());
+                }
+                core::mem::forget(c);
+                bufs.push(buf);
+            }
+            assert_eq!(outs[1], outs[2], "fmt {f} tile {t} params {p:x?}: isolated layouts");
+            let far = (256..0x10000).rev().find(|&i| bufs[1][i] == bufs[2][i]).unwrap_or(0);
+            assert!(far >= 256, "fmt {f} tile {t} params {p:x?}: console never wrote past the surface");
+            if outs[0] != outs[1] {
+                varied += 1;
+            }
+            reach = reach.max(far + 1 - 256);
+        }
+    }
+    println!("xg_x dcc enc stream overflow: {n} cases where native predicts the packed stream overruns the 256-byte output surface; console driver 0x189b0 wrote past the surface in all {n} (up to {reach} bytes past the end), and its in-bounds output changed when the next heap block was the codec's own surface 2 in {varied} of them");
+    assert!(n > 0);
 }
