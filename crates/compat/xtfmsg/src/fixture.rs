@@ -198,6 +198,7 @@ pub struct ClientSession {
     pub status: u32,
     pub response: Option<String>,
     pub calls: Mutex<Vec<(u32, u32, u32)>>,
+    pub request_bodies: Mutex<Vec<Option<String>>>,
 }
 
 unsafe extern "system" fn cs_add_ref(o: Obj) -> u32 {
@@ -213,12 +214,13 @@ unsafe extern "system" fn cs_release(o: Obj) -> u32 {
     n
 }
 
-unsafe extern "system" fn cs_begin(o: Obj, op: u32, _msg: Obj, exchange: *mut u32) -> HRESULT {
+unsafe extern "system" fn cs_begin(o: Obj, op: u32, msg: Obj, exchange: *mut u32) -> HRESULT {
     let s = o as *mut ClientSession;
     (*s).calls.lock().unwrap().push((op, 0, 0));
     if (*s).begin_hr < 0 {
         return (*s).begin_hr;
     }
+    (*s).request_bodies.lock().unwrap().push(json_text(msg));
     *exchange = 0x41;
     S_OK
 }
@@ -240,7 +242,7 @@ unsafe extern "system" fn cs_end(o: Obj, timeout: u32, exchange: u32, status: *m
 static CS_VTBL: Vt<8> = Vt([ss_qi as *const (), cs_add_ref as *const (), cs_release as *const (), cs_begin as *const (), ss_unused as *const (), ss_unused as *const (), ss_unused as *const (), cs_end as *const ()]);
 
 pub unsafe fn client_session(begin_hr: HRESULT, end_hr: HRESULT, status: u32, response: Option<&str>) -> *mut ClientSession {
-    Box::into_raw(Box::new(ClientSession { vtbl: &CS_VTBL, refs: AtomicU32::new(1), begin_hr, end_hr, status, response: response.map(str::to_string), calls: Mutex::new(Vec::new()) }))
+    Box::into_raw(Box::new(ClientSession { vtbl: &CS_VTBL, refs: AtomicU32::new(1), begin_hr, end_hr, status, response: response.map(str::to_string), calls: Mutex::new(Vec::new()), request_bodies: Mutex::new(Vec::new()) }))
 }
 
 pub fn as_obj<T>(p: *mut T) -> Obj {
