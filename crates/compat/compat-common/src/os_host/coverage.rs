@@ -10,6 +10,7 @@ pub const AFFINITY: &str = "crates\\compat\\compat-common\\src\\os_host\\affinit
 pub const PLM: &str = "crates\\compat\\compat-common\\src\\os_host\\plm.rs";
 pub const DLLDIR: &str = "crates\\compat\\compat-common\\src\\os_host\\dlldir.rs";
 pub const MINUSERX_QUEUE: &str = "crates\\compat\\minuserx\\src\\queue.rs";
+pub const MINAPPMODELX: &str = "crates\\compat\\minappmodelx\\src\\lib.rs";
 pub const GDK_REGISTRY: &str = "crates\\compat\\compat-common\\src\\gdk\\hook.rs";
 
 const USER_SAME: &str = "same Win32 signature on console (minuserx exports wrap an internal CoreWindow-backed implementation that returns an HRESULT mapped to the Win32 result); the API set resolves to PC user32. Console differences are placement only (one fullscreen core window), handled by the window clamp in crates\\compat\\d3d12_xs\\src\\present.rs, so no hook";
@@ -27,10 +28,10 @@ pub const ROWS: &[(&str, &str, Status)] = &[
     ("kernel32legacy.dll", "RegisterWaitForSingleObject", Status::NameMatchPc("console: std-handle pseudo handles from PEB then RtlRegisterWait; same as PC")),
     ("kernel32legacy.dll", "UnregisterWait", Status::NameMatchPc("console: NULL -> ERROR_INVALID_HANDLE, RtlDeregisterWait, STATUS_PENDING -> FALSE with ERROR_IO_PENDING; same as PC")),
     ("advapi32legacy.dll", "RegOpenKeyW", Status::HookedByOtherOwner(GDK_REGISTRY)),
-    ("minappmodelx.dll", "RegisterAppStateChangeNotification", Status::Hooked(PLM)),
-    ("minappmodelx.dll", "UnregisterAppStateChangeNotification", Status::Hooked(PLM)),
-    ("minappmodelx.dll", "RegisterAppConstrainedChangeNotification", Status::Hooked(PLM)),
-    ("minappmodelx.dll", "UnregisterAppConstrainedChangeNotification", Status::Hooked(PLM)),
+    ("minappmodelx.dll", "RegisterAppStateChangeNotification", Status::Emulated(MINAPPMODELX)),
+    ("minappmodelx.dll", "UnregisterAppStateChangeNotification", Status::Emulated(MINAPPMODELX)),
+    ("minappmodelx.dll", "RegisterAppConstrainedChangeNotification", Status::Emulated(MINAPPMODELX)),
+    ("minappmodelx.dll", "UnregisterAppConstrainedChangeNotification", Status::Emulated(MINAPPMODELX)),
     ("minuserx.dll", "CreateWindowExA", Status::NameMatchPc(USER_SAME)),
     ("minuserx.dll", "CreateWindowExW", Status::NameMatchPc(USER_SAME)),
     ("minuserx.dll", "DefWindowProcW", Status::NameMatchPc(USER_SAME)),

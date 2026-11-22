@@ -27,11 +27,11 @@ function Say([string]$m, [string]$c = 'Gray') { Write-Host ("[{0:HH:mm:ss}] {1}"
 function ConvertTo-MdText([string]$s) { if ($null -eq $s) { return '' }; return ($s -replace '\|', '\|' -replace '`', "'" -replace '[\x00-\x08\x0b\x0c\x0e-\x1f]', '') }
 
 $Titles = @(
-  [pscustomobject]@{ Slug = 'fortnite-lobby'; Name = 'Fortnite (lobby)'; Script = 'run_fortnite.ps1'; Args = @{};
+  [pscustomobject]@{ Slug = 'fortnite-lobby'; Name = 'Fortnite (lobby, default ready-up path armed)'; Script = 'run_fortnite.ps1'; Args = @{};
     LogDir = (Join-Path $env:TEMP 'tombox'); Proc = 'FortniteClient-XSX-Shipping'; Seconds = $FortniteLobbySeconds; Kind = 'fortnite'; Xone = $false;
     Exe = 'D:\xbox-pc-port\games\Fortnite\extracted\Mount\FortniteGame\Binaries\XSX\FortniteClient-XSX-Shipping.exe'
     Saved = @('D:\xbox-pc-port\emulator\run\Mount\FortniteGame\Saved') },
-  [pscustomobject]@{ Slug = 'fortnite-play'; Name = 'Fortnite (-Match Play, offline single player)'; Script = 'run_fortnite.ps1'; Args = @{ Match = 'Play'; GameServer = '127.0.0.1:7777' };
+  [pscustomobject]@{ Slug = 'fortnite-play'; Name = 'Fortnite (ready up -> offline single player match)'; Script = 'run_fortnite.ps1'; Args = @{ GameServer = '127.0.0.1:7777' };
     LogDir = (Join-Path $env:TEMP 'tombox'); Proc = 'FortniteClient-XSX-Shipping'; Seconds = $FortnitePlaySeconds; Kind = 'fortnite'; Xone = $false;
     Exe = 'D:\xbox-pc-port\games\Fortnite\extracted\Mount\FortniteGame\Binaries\XSX\FortniteClient-XSX-Shipping.exe'
     Saved = @('D:\xbox-pc-port\emulator\run\Mount\FortniteGame\Saved') },
@@ -63,7 +63,10 @@ $MilestoneDefs = @{
     @{ Name = 'hotfix check'; Src = 'ods'; Re = 'CheckComplete UpdateSuccess' },
     @{ Name = 'game-mode select'; Src = 'ods'; Re = 'UI\.State\.Startup\.SubgameSelect\]' },
     @{ Name = 'lobby'; Src = 'ods'; Re = 'to \[UI\.State\.Athena\.Frontend' },
-    @{ Name = 'match start'; Src = 'any'; Re = '\[fn-match\] browse (rewrite|pass)|LogLoad: LoadMap: .*(Apollo|Athena_Terrain)|to \[UI\.State\.Athena\.(Loading|Playing|InGame|Spectating)' }
+    @{ Name = 'ready-up ticket'; Src = 'compat'; Re = '\[mms\] websocket ticket \S+ accepted' },
+    @{ Name = 'session assigned'; Src = 'ods'; Re = 'HandlePlayMessage - Received session assignment' },
+    @{ Name = 'session joined'; Src = 'ods'; Re = 'OnJoinSessionComplete\] Result: Success' },
+    @{ Name = 'match start'; Src = 'any'; Re = '\[fn-match\] browse rewrite|LogLoad: LoadMap: .*(Apollo|Athena_Terrain)|to \[UI\.State\.Athena\.(Loading|Playing|InGame|Spectating)' }
   )
   generic = @(
     @{ Name = 'boot'; Src = 'compat'; Re = '\[gdk\] install emulated GDK runtime' },

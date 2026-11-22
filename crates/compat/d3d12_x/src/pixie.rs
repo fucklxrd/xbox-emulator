@@ -397,20 +397,34 @@ mod tests {
             assert_eq!(allocate(INVALID, 0, 0x100, 0x4000_0000, 0, &mut a, &mut b, null_mut()), E_INVALIDARG);
             assert_eq!(query_fresh(1, 0, &mut a, null_mut()), E_INVALIDARG);
             assert_eq!(query_fresh(0, 0, null_mut(), null_mut()), E_INVALIDARG);
-            assert_eq!(query_fresh(0, 0, &mut a, null_mut()), 0x8007_0002u32 as i32);
         }
     }
 
     #[test]
-    fn device_entries_report_missing_driver() {
+    fn device_entries_use_the_emulated_kmd() {
+        let _g = kmd::test_serial();
         let t = table();
-        let open: unsafe extern "system" fn(*mut isize) -> i32 = unsafe { core::mem::transmute(t[1] as usize) };
-        let mut h = 0isize;
-        assert_eq!(unsafe { open(&mut h) }, 0x8007_0002u32 as i32);
+        let open: unsafe extern "system" fn(*mut isize) -> i32 = unsafe { core::mem::transmute(t[0x08 / 8] as usize) };
+        let triple: unsafe extern "system" fn(isize, *mut u64, *mut u32, *mut u32) -> i32 = unsafe { core::mem::transmute(t[0xc0 / 8] as usize) };
         assert_eq!(unsafe { open(null_mut()) }, E_INVALIDARG);
+        let mut h = INVALID;
+        assert_eq!(unsafe { open(&mut h) }, 0);
+        assert_ne!(h, INVALID);
+        assert_eq!(kmd::cached(), h);
+        let (mut f, mut m, mut cu) = (0u64, 0u32, 0u32);
+        assert_eq!(unsafe { triple(h, &mut f, &mut m, &mut cu) }, 0);
+        let r = xgs_kmd_emu::gpu_reply(xgs_kmd_emu::device_type());
+        assert_eq!(f.to_le_bytes(), r[0..8]);
+        assert_eq!(m.to_le_bytes(), r[8..12]);
+        assert_eq!(cu.to_le_bytes(), r[12..16]);
+        let not_supported = 0x8007_0032u32 as i32;
         let buf = [0u8; 0x4028];
         let mut out = [0u8; 0x90];
+        let (mut a, mut b, mut c) = (0u64, 0u64, 0u32);
         unsafe {
+            assert_eq!(read_u32(h, &mut c), not_supported);
+            assert_eq!(read_pair(h, &mut a, &mut b), not_supported);
+            assert_eq!(query_fresh(0, 0, &mut a, null_mut()), not_supported);
             assert_eq!(c20b(buf.as_ptr().cast()), STATUS_UNSUCCESSFUL);
             assert_eq!(c207(1, 2), STATUS_UNSUCCESSFUL);
             assert_eq!(c1bb(buf.as_ptr().cast(), out.as_mut_ptr().cast()), STATUS_UNSUCCESSFUL);
@@ -421,9 +435,17 @@ mod tests {
             assert_eq!(c23b(1, 2, 3), STATUS_UNSUCCESSFUL);
             assert_eq!(c273(buf.as_ptr().cast()), STATUS_UNSUCCESSFUL);
             assert_eq!(c217(out.as_mut_ptr().cast()), STATUS_UNSUCCESSFUL);
-            assert_eq!(c27f(buf.as_ptr().cast()), STATUS_UNSUCCESSFUL);
+            let mut req = [0xffu8; 0x10];
+            xgs_kmd_emu::ported::set_gpu_error(0, "");
+            assert_eq!(c27f(req.as_mut_ptr().cast()), 0);
+            assert_eq!(&req[12..16], &[0; 4]);
+            assert_eq!(close_other(h), 0);
+            assert!(xgs_kmd_emu::is_device(h));
+            assert_eq!(close_device(h), 0);
             assert_eq!(close_device(INVALID), 0);
-            assert_eq!(close_other(INVALID), 0);
         }
+        assert_eq!(kmd::cached(), INVALID);
+        assert!(!xgs_kmd_emu::is_device(h));
+        assert_eq!(unsafe { triple(h, &mut f, &mut m, &mut cu) }, 0x8007_0006u32 as i32);
     }
 }

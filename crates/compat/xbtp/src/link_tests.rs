@@ -6,7 +6,6 @@ use std::net::{TcpListener, TcpStream};
 use std::sync::{Mutex, MutexGuard};
 use std::time::Duration;
 
-static TEST_LOCK: Mutex<()> = Mutex::new(());
 
 struct Pending {
     buf: usize,
@@ -222,7 +221,7 @@ impl Drop for Env {
 }
 
 fn env(ops: &'static DeviceOps) -> Env {
-    let g = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let g = crate::conn::tests::NET_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     {
         let mut f = fake();
         f.eps.clear();

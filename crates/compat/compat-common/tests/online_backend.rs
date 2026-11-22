@@ -1,5 +1,10 @@
-#![cfg(tombox_backend_data)]
+#[cfg(not(tombox_backend_data))]
+#[test]
+#[ignore = "needs crates/compat/compat-common/backend_data"]
+fn online_backend_needs_backend_data() {}
 
+#[cfg(tombox_backend_data)]
+mod backend {
 use compat_common::online::{fortnite::Fortnite, http, util};
 use serde_json::Value;
 use std::io::{BufRead, BufReader, Read, Write};
@@ -356,4 +361,5 @@ Content-Length: 0
     assert_eq!(c.req("GET", "/PbgTgOjJvNqMrvYW/foo/init.mp4", "", "").status, 404);
     assert_eq!(c.req("GET", "/PbgTgOjJvNqMrvYW/other.bin", "", "").status, 404);
     assert_eq!(c.req("POST", "/PbgTgOjJvNqMrvYW/master.blurl", "", "").status, 404);
+}
 }

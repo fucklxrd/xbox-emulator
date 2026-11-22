@@ -16,10 +16,24 @@ fn export_table_matches_exports_txt() {
 }
 
 #[test]
-fn family_xref_exports_stay_unexported() {
+fn family_xref_round_trips_through_get_package_install_time() {
+    let get = get();
     let h = load_built("kernelbase.dll", "tbx_kernelbase.dll");
-    assert!(proc(h, "AddPackageToFamilyXref").is_null());
-    assert!(proc(h, "RemovePackageFromFamilyXref").is_null());
+    type Add = unsafe extern "system" fn(*const core::ffi::c_void, *const u16, *const u16, u32, u64) -> i32;
+    type Remove = unsafe extern "system" fn(*const core::ffi::c_void, *const u16) -> i32;
+    let add: Add = unsafe { core::mem::transmute(proc(h, "AddPackageToFamilyXref")) };
+    let remove: Remove = unsafe { core::mem::transmute(proc(h, "RemovePackageFromFamilyXref")) };
+    let full = wide(&format!("TomBox.XrefDll{}_2.0.0.0_x64__8wekyb3d8bbwe", std::process::id()));
+    let mut ft = [0u32; 2];
+    unsafe {
+        assert_eq!(add(core::ptr::null(), core::ptr::null(), core::ptr::null(), 0, 0), 0x8007_0057u32 as i32);
+        assert_eq!(add(core::ptr::null(), full.as_ptr(), core::ptr::null(), 0, 0x0123_4567_89ab_cdef), 0);
+        assert_eq!(get(full.as_ptr(), &mut ft), 0);
+        assert_eq!(ft, [0x89ab_cdef, 0x0123_4567]);
+        assert_eq!(remove(core::ptr::null(), full.as_ptr()), 0);
+        assert_eq!(get(full.as_ptr(), &mut ft), 0x490);
+        assert_eq!(remove(core::ptr::null(), full.as_ptr()), 0);
+    }
 }
 
 #[test]

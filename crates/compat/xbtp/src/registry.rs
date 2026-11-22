@@ -78,7 +78,7 @@ pub struct ExtensionModule {
 unsafe impl Send for ExtensionModule {}
 unsafe impl Sync for ExtensionModule {}
 
-unsafe fn module_file_name(h: HANDLE) -> Result<Vec<u16>, HRESULT> {
+pub unsafe fn module_file_name(h: HANDLE) -> Result<Vec<u16>, HRESULT> {
     let mut buf = vec![0u16; 0x104];
     let n = GetModuleFileNameW(h, buf.as_mut_ptr(), 0x104);
     if n == 0 {

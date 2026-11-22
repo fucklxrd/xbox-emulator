@@ -2,7 +2,7 @@
 name = "xvmaudioservice"
 version = "0.1.0"
 edition = "2021"
-description = "Compat DLL for the console XVMAudioService.dll (Gamecore XVM Audio Service): the WRL module exports ported from the console bodies."
+description = "Compat DLL for the console XVMAudioService.dll (Gamecore XVM Audio Service): DllGetActivationFactory ported from the console body; DllGetClassObject and DllCanUnloadNow run the console DLL with its OS imports routed to console-sandbox, except the Logan-bound class."
 license = "MIT OR Apache-2.0"
 build = "build.rs"
 
@@ -10,6 +10,11 @@ build = "build.rs"
 name = "XVMAudioService"
 crate-type = ["cdylib", "rlib"]
 path = "src/lib.rs"
+
+[dependencies]
+console-image = { path = "../console-image" }
+console-sandbox = { path = "../console-sandbox" }
+compat-common = { path = "../compat-common" }
 
 [build-dependencies]
 xone-exports = { path = "../xone-exports" }

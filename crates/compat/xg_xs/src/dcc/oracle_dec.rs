@@ -4,23 +4,23 @@ use crate::dcc_oracle::{configs, diff, holes, Con, Rng};
 use crate::layout::E_INVALIDARG;
 use crate::oracle::{oracle, Oracle, SERIAL};
 
-type Lay = unsafe extern "system" fn(*mut u8, *mut u8, *const u8, u32);
-type Conv = unsafe extern "system" fn(*mut u8, *mut u8, *const u8, *const u32, *const u32);
+pub(super) type Lay = unsafe extern "system" fn(*mut u8, *mut u8, *const u8, u32);
+pub(super) type Conv = unsafe extern "system" fn(*mut u8, *mut u8, *const u8, *const u32, *const u32);
 type Wd = unsafe extern "system" fn(*const u8, *const u8) -> u64;
 type Clr = unsafe extern "system" fn(*const u8, *const u8, u8, u8) -> u64;
-type Enc = unsafe extern "system" fn(u32, *const u8, *mut u8, *mut u8, *mut u32, u32, u32, u32, *const u32) -> i32;
-type DecF = unsafe extern "system" fn(u32, *const u8, *const u8, *mut u8, u32, u32, u32, *const u32) -> i32;
+pub(super) type Enc = unsafe extern "system" fn(u32, *const u8, *mut u8, *mut u8, *mut u32, u32, u32, u32, *const u32) -> i32;
+pub(super) type DecF = unsafe extern "system" fn(u32, *const u8, *const u8, *mut u8, u32, u32, u32, *const u32) -> i32;
 
-const P1S: [u32; 5] = [0, 1, 2, 3, 0x8000_0000];
+pub(super) const P1S: [u32; 5] = [0, 1, 2, 3, 0x8000_0000];
 
-fn copy(d: &Dcc) -> Dcc {
+pub(super) fn copy(d: &Dcc) -> Dcc {
     let mut e = Dcc::new();
     e.m.copy_from_slice(&d.m);
     e.b = d.b;
     e
 }
 
-struct Tally {
+pub(super) struct Tally {
     names: Vec<&'static str>,
     cases: Vec<u64>,
     bad: Vec<u64>,
@@ -28,10 +28,10 @@ struct Tally {
 }
 
 impl Tally {
-    fn new() -> Tally {
+    pub(super) fn new() -> Tally {
         Tally { names: Vec::new(), cases: Vec::new(), bad: Vec::new(), errs: Vec::new() }
     }
-    fn idx(&mut self, n: &'static str) -> usize {
+    pub(super) fn idx(&mut self, n: &'static str) -> usize {
         if let Some(i) = self.names.iter().position(|&x| x == n) {
             return i;
         }
@@ -41,7 +41,7 @@ impl Tally {
         self.errs.push(0);
         self.names.len() - 1
     }
-    fn hit(&mut self, n: &'static str, m: Option<String>, ctx: &str) {
+    pub(super) fn hit(&mut self, n: &'static str, m: Option<String>, ctx: &str) {
         let i = self.idx(n);
         self.cases[i] += 1;
         if let Some(m) = m {
@@ -51,14 +51,14 @@ impl Tally {
             }
         }
     }
-    fn err(&mut self, n: &'static str) {
+    pub(super) fn err(&mut self, n: &'static str) {
         let i = self.idx(n);
         self.errs[i] += 1;
     }
-    fn total_bad(&self) -> u64 {
+    pub(super) fn total_bad(&self) -> u64 {
         self.bad.iter().sum()
     }
-    fn print(&self, title: &str) {
+    pub(super) fn print(&self, title: &str) {
         for i in 0..self.names.len() {
             println!("{} {}: {} cases, {} mismatches, {} native E_INVALIDARG (console not run)", title, self.names[i], self.cases[i], self.bad[i], self.errs[i]);
         }
@@ -311,7 +311,7 @@ fn cause(s: &Dcc) -> &'static str {
     }
     "b0 segment never written (console stack bytes)"
 }
-fn patterns(r: &mut Rng, bpe: usize) -> Vec<[u8; 256]> {
+pub(super) fn patterns(r: &mut Rng, bpe: usize) -> Vec<[u8; 256]> {
     let bpe = bpe.max(1).min(16);
     let mut v = Vec::new();
     let mut el = [0u8; 16];
@@ -350,11 +350,11 @@ fn patterns(r: &mut Rng, bpe: usize) -> Vec<[u8; 256]> {
     v
 }
 
-fn valid_metas() -> Vec<u8> {
+pub(super) fn valid_metas() -> Vec<u8> {
     (0..256u32).filter(|&m| valid_meta(m)).map(|m| m as u8).collect()
 }
 
-fn states() -> Vec<((u32, u32, u32, u32, u32), usize)> {
+pub(super) fn states() -> Vec<((u32, u32, u32, u32, u32), usize)> {
     let mut seen: std::collections::HashMap<Vec<u8>, usize> = std::collections::HashMap::new();
     let mut out: Vec<((u32, u32, u32, u32, u32), usize)> = Vec::new();
     for (f, sw, dim, p0, _) in configs() {
@@ -376,7 +376,7 @@ fn states() -> Vec<((u32, u32, u32, u32, u32), usize)> {
     out
 }
 
-fn encode(o: &Oracle, inp: &[u8; 256], f: u32, sw: u32, dim: u32, p0: u32, p1: u32, bpe: u32) -> Option<([u8; 256], u8)> {
+pub(super) fn encode(o: &Oracle, inp: &[u8; 256], f: u32, sw: u32, dim: u32, p0: u32, p1: u32, bpe: u32) -> Option<([u8; 256], u8)> {
     let enc: Enc = unsafe { core::mem::transmute(o.f("XGEncodeDCC")) };
     let p1 = if bpe < 4 && p1 >= 2 { 0 } else { p1 };
     let prm = [p0, p1, 0, 0];
@@ -390,14 +390,14 @@ fn encode(o: &Oracle, inp: &[u8; 256], f: u32, sw: u32, dim: u32, p0: u32, p1: u
     Some((out, meta))
 }
 
-fn defined(mut s: Dcc) -> Dcc {
+pub(super) fn defined(mut s: Dcc) -> Dcc {
     s.m[0x6a] = 0;
     s.m[0x6b] = 0x80;
     s
 }
 
 #[inline(never)]
-fn smear(v: u8) -> u8 {
+pub(super) fn smear(v: u8) -> u8 {
     let mut a = [0u8; 0x4000];
     for x in a.iter_mut() {
         unsafe { core::ptr::write_volatile(x, v) };
@@ -644,4 +644,294 @@ fn oracle_dcc_dec_e2e() {
         println!("dcc dec e2e native E_INVALIDARG cause {}: {}", c, n);
     }
     assert_eq!(bad, 0);
+}
+
+fn color_faults(d: &Dcc) -> bool {
+    let meta = d.r32(0x58);
+    if meta & 0xf == 0 {
+        return false;
+    }
+    let mut r15 = d.r32(0x4c);
+    if r15 == 0 {
+        if d.r32(8).wrapping_sub(1) <= 1 {
+            return false;
+        }
+        let v = d.i32(0x48);
+        if v > 0 && v <= 0xb {
+            r15 = 3;
+        } else if v > 0 && v <= 0xf {
+            return false;
+        } else {
+            r15 = if d.r8(0x10) != 0 { 2 } else { 3 };
+        }
+    }
+    if r15 == 1 || d.r32(4) >> 2 != 0 {
+        return false;
+    }
+    let Some(segs) = super::bits::seg_info_checked(meta) else { return false };
+    let old = d.r32(0x5c);
+    let mut m5c = 0u32;
+    for i in 0..4 {
+        if (old >> i) & 1 != 0 {
+            m5c |= segs[i];
+        }
+    }
+    (0..8u32).any(|k| (m5c >> (k >> 1)) & 1 != 0 && super::bits::sizes_differ(meta, k * 32) == Some(true))
+}
+
+#[inline(never)]
+fn only_tid(c: &Con) {
+    c.call1(0x244a0);
+}
+
+fn tid_holes(s: &Dcc) -> Vec<usize> {
+    let mut t = copy(s);
+    if t.r32(4) == 16 {
+        t.w32(4, 8);
+    }
+    let al = t.r8(0x12c0) as u32;
+    let mut v = Vec::new();
+    for k in 0..4u32 {
+        if (t.r32(0x5c) >> k) & 1 == 0 || super::bits::sizes_differ(t.r32(0x58), k * 64) != Some(true) {
+            continue;
+        }
+        let g = match (al >> (2 * k)) & 3 {
+            1 => 8,
+            2 => 10,
+            3 => 9,
+            _ => 4,
+        };
+        let mut ever = [false; 64];
+        for a in k * 64..k * 64 + 64 {
+            let c = px::get(&t, a, g).unwrap();
+            ever[(px::set(&t, &c, 3).unwrap() & 63) as usize] = true;
+        }
+        for b in 0..64 {
+            if !ever[b] {
+                v.push((k * 64) as usize + b);
+            }
+        }
+    }
+    v
+}
+
+#[inline(never)]
+fn drive(c: &Con, d: &Dcc, v: u8) -> Dcc {
+    let mut s = copy(d);
+    s.b[0] = [v; 256];
+    s.b[2] = [v; 256];
+    c.push(&s);
+    let _ = smear(v);
+    c.call1(0x23210);
+    c.pull()
+}
+
+#[test]
+fn oracle_dcc_dec_undefined_classes() {
+    let _g = SERIAL.lock().unwrap_or_else(|e| e.into_inner());
+    let Some(o) = oracle() else { return };
+    let metas = valid_metas();
+    let st = states();
+    let mut r = Rng(0x0dd_c1a5);
+    let mut t: std::collections::BTreeMap<String, u64> = std::collections::BTreeMap::new();
+    let mut add = |k: String| *t.entry(k).or_insert(0) += 1;
+    let mut unknown = 0u64;
+    let mut not_undefined = 0u64;
+    for &((f, sw, dim, p0, p1), _) in &st {
+        let Some(con) = Con::new(&o, f, sw, dim, p0, p1) else { continue };
+        let bpe = con.pull().r32(4);
+        let mut work: Vec<([u8; 256], u8, &'static str)> = Vec::new();
+        for p in patterns(&mut r, bpe as usize) {
+            if let Some((comp, meta)) = encode(&o, &p, f, sw, dim, p0, p1, bpe) {
+                work.push((comp, meta, "encoded"));
+            }
+        }
+        for _ in 0..4 {
+            let mut b = [0u8; 256];
+            for x in b.iter_mut() {
+                *x = r.u() as u8;
+            }
+            work.push((b, metas[r.below(metas.len() as u32) as usize], "random"));
+        }
+        for (b, m, kind) in work {
+            let mut nd = [0u8; 256];
+            if crate::dcc::decode(1, &b, &[m], &mut nd, f, sw, dim, p0, p1) == 0 {
+                add(format!("accepted [{}]", kind));
+                continue;
+            }
+            let mut d = Dcc::new();
+            d.init(f, sw, dim, p0, p1).unwrap();
+            d.b[1] = b;
+            d.w32(0x58, m as u32);
+            if color_faults(&d) {
+                add(format!("console #DE in color, not run [{}] bpe={}", kind, bpe));
+                continue;
+            }
+            let c = cause(&d);
+            if c == "tid swizzle 0x244a0" || c.starts_with("b0 segment") {
+                let mut s = copy(&d);
+                s.w8(0x6a, 0);
+                s.w8(0x6b, 0x80);
+                con.push(&s);
+                con.call1(0x23560);
+                let s1 = con.pull();
+                let h = tid_holes(&s1);
+                let sub;
+                let proven;
+                if c == "tid swizzle 0x244a0" && !h.is_empty() {
+                    sub = "tid swizzle convert leaves scratch holes, filled from caller stack";
+                    let mut ok = true;
+                    for v in [0x11u8, 0x22] {
+                        con.push(&s1);
+                        let _ = smear(v);
+                        only_tid(&con);
+                        let a = con.pull();
+                        ok &= h.iter().all(|&i| a.b[2][i] == v);
+                    }
+                    proven = ok;
+                } else {
+                    sub = if c.starts_with("b0") { "output segment never written, keeps prior buffer bytes" } else { "tid swizzle consumes b2 segment never written this call" };
+                    let a = drive(&con, &d, 0x11);
+                    let z = drive(&con, &d, 0x22);
+                    proven = a.b[0] != z.b[0];
+                }
+                if !proven {
+                    not_undefined += 1;
+                    if not_undefined <= 6 {
+                        println!("unproven {} f={} sw={} dim={} p0={} p1={:#x} meta={:#04x} bpe={} holes={}", sub, f, sw, dim, p0, p1, m, bpe, h.len());
+                    }
+                }
+                add(format!("{} [{}] bpe={}{}", sub, kind, bpe, if proven { "" } else { " UNPROVEN" }));
+                continue;
+            }            unknown += 1;
+            add(format!("UNCLASSIFIED {} [{}]", c, kind));
+        }
+    }
+    for (k, n) in &t {
+        println!("dcc dec class {}: {}", k, n);
+    }
+    println!("dcc dec undefined classes: {} unclassified, {} rejected blocks whose console output did not depend on uninitialised stack/buffer bytes", unknown, not_undefined);
+    assert_eq!(unknown, 0);
+    assert_eq!(not_undefined, 0);
+}
+#[test]
+fn oracle_dcc_decode_export_shim() {
+    let _g = SERIAL.lock().unwrap_or_else(|e| e.into_inner());
+    let Some(o) = oracle() else { return };
+    let cdec: DecF = unsafe { core::mem::transmute(o.f("XGDecodeDCC")) };
+    let mut r = Rng(0x5141_dec);
+    let mut cases = 0u64;
+    let src = [0u8; 256 * 2];
+    let meta = [0x10u8, 0x00];
+    let prm = [0u32, 0, 0, 0];
+    let mut a = [0u8; 512];
+    let mut b = [0u8; 512];
+    let nul = core::ptr::null::<u8>();
+    let call = |n: bool, cnt: u32, s: *const u8, m: *const u8, d: *mut u8, f: u32, sw: u32, dim: u32, p: *const u32| -> i32 {
+        unsafe { if n { crate::XGDecodeDCC(cnt, s, m, d, f, sw, dim, p) } else { cdec(cnt, s, m, d, f, sw, dim, p) } }
+    };
+    for (s, m, pp) in [(nul, meta.as_ptr(), prm.as_ptr()), (src.as_ptr(), nul, prm.as_ptr()), (src.as_ptr(), meta.as_ptr(), core::ptr::null())] {
+        cases += 1;
+        assert_eq!(call(true, 1, s, m, a.as_mut_ptr(), 28, 1, 0, pp), call(false, 1, s, m, b.as_mut_ptr(), 28, 1, 0, pp));
+    }
+    cases += 1;
+    assert_eq!(call(true, 1, src.as_ptr(), meta.as_ptr(), core::ptr::null_mut(), 28, 1, 0, prm.as_ptr()), call(false, 1, src.as_ptr(), meta.as_ptr(), core::ptr::null_mut(), 28, 1, 0, prm.as_ptr()));
+    for f in [0u32, 0x79, 0x7a, 0x100, 0x7fff_ffff] {
+        for sw in [0u32, 1, 0x1f, 0x20, 0x7fff_ffff] {
+            cases += 1;
+            let x = call(true, 1, src.as_ptr(), meta.as_ptr(), a.as_mut_ptr(), f, sw, 0, prm.as_ptr());
+            let y = call(false, 1, src.as_ptr(), meta.as_ptr(), b.as_mut_ptr(), f, sw, 0, prm.as_ptr());
+            assert_eq!(x, y, "f={:#x} sw={:#x}", f, sw);
+        }
+    }
+    let mut asserts = 0u64;
+    for f in 1..=0x78u32 {
+        if !crate::dcc::safe_format(f) {
+            for cnt in [0u32, 1] {
+                asserts += 1;
+                assert_eq!(call(true, cnt, src.as_ptr(), meta.as_ptr(), a.as_mut_ptr(), f, 1, 0, prm.as_ptr()), E_INVALIDARG);
+            }
+            continue;
+        }
+        for sw in [0u32, 1, 2, 3, 0x10, 0x1f, 0xffff_fffe, 0x8000_0000] {
+            for dim in [0u32, 3, 4, 9] {
+                let p = [r.below(3), [0u32, 1, 3][r.below(3) as usize], 0, 0];
+                for cnt in [0u32, 1, 2] {
+                    let mut s = [0u8; 512];
+                    for x in s.iter_mut() {
+                        *x = r.u() as u8;
+                    }
+                    let m = [[0x00u8, 0x10, 0x20, 0x30, 0x50][r.below(5) as usize], 0x10];
+                    a = [0x5a; 512];
+                    b = [0x5a; 512];
+                    let x = call(true, cnt, s.as_ptr(), m.as_ptr(), a.as_mut_ptr(), f, sw, dim, p.as_ptr());
+                    let y = call(false, cnt, s.as_ptr(), m.as_ptr(), b.as_mut_ptr(), f, sw, dim, p.as_ptr());
+                    cases += 1;
+                    assert_eq!(x, y, "hr f={} sw={:#x} dim={} p={:?} cnt={}", f, sw, dim, p, cnt);
+                    if x == 0 {
+                        assert_eq!(a[..], b[..], "bytes f={} sw={:#x} dim={} p={:?} cnt={} meta={:02x?}", f, sw, dim, p, cnt, m);
+                    }
+                }
+            }
+        }
+    }
+    println!("dcc decode export shim: {} cases match console (hr and bytes), {} unsupported-format calls return E_INVALIDARG where the console hits int3 at 0xa894 then returns E_INVALIDARG", cases, asserts);
+}
+
+fn de_cases(n: usize) -> Vec<((u32, u32, u32, u32, u32), [u8; 256], u8)> {
+    let metas = valid_metas();
+    let mut r = Rng(0xde_0094);
+    let mut v = Vec::new();
+    for &((f, sw, dim, p0, p1), _) in &states() {
+        let mut d = Dcc::new();
+        if d.init(f, sw, dim, p0, p1).is_err() {
+            continue;
+        }
+        let mut b = [0u8; 256];
+        for x in b.iter_mut() {
+            *x = r.u() as u8;
+        }
+        let m = metas[r.below(metas.len() as u32) as usize];
+        d.b[1] = b;
+        d.w32(0x58, m as u32);
+        if color_faults(&d) && cause(&d) == "color 0x24ec0" {
+            v.push(((f, sw, dim, p0, p1), b, m));
+            if v.len() >= n {
+                break;
+            }
+        }
+    }
+    v
+}
+
+#[test]
+fn oracle_dcc_dec_color_fault_child() {
+    if let Ok(i) = std::env::var("DCC_DE_CASE") {
+        let Some(o) = oracle() else { std::process::exit(3) };
+        let cdec: DecF = unsafe { core::mem::transmute(o.f("XGDecodeDCC")) };
+        let ((f, sw, dim, p0, p1), b, m) = de_cases(64)[i.parse::<usize>().unwrap()];
+        let prm = [p0, p1, 0, 0];
+        let mut cd = [0u8; 256];
+        unsafe { cdec(1, b.as_ptr(), [m].as_ptr(), cd.as_mut_ptr(), f, sw, dim, prm.as_ptr()) };
+        std::process::exit(0);
+    }
+    let _g = SERIAL.lock().unwrap_or_else(|e| e.into_inner());
+    let Some(_o) = oracle() else { return };
+    let cases = de_cases(24);
+    assert!(cases.len() >= 20);
+    let exe = std::env::current_exe().unwrap();
+    let mut faults = 0;
+    for i in 0..cases.len() {
+        let st = std::process::Command::new(&exe)
+            .args(["dcc::oracle_dec::oracle_dcc_dec_color_fault_child", "--exact", "--test-threads=1"])
+            .env("DCC_DE_CASE", i.to_string())
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .status()
+            .unwrap();
+        let code = st.code().unwrap_or(0) as u32;
+        assert_eq!(code, 0xc000_0094, "case {} {:?} exit {:#x}", i, cases[i].0, code);
+        faults += 1;
+    }
+    println!("dcc dec color #DE: {} predicted cases, console XGDecodeDCC raised STATUS_INTEGER_DIVIDE_BY_ZERO in {} child processes", cases.len(), faults);
 }

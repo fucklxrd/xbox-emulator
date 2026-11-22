@@ -116,8 +116,6 @@ pub unsafe fn write(list: *mut c_void, copy_list: bool, addr: u64, a: u32, b: u3
     };
     let end: unsafe extern "system" fn(*mut c_void, *mut c_void, u32, u32) =
         unsafe { core::mem::transmute(*vt(list).add(53)) };
-    let resolve: unsafe extern "system" fn(*mut c_void, *mut c_void, u32, u32, u32, *mut c_void, u64) =
-        unsafe { core::mem::transmute(*vt(list).add(54)) };
     let tracked = crate::gpu_va::state(e.res);
     let (before, during) = crate::fill::copy_states(tracked, copy_list);
     let need = before != during && tracked != 0x400;
@@ -134,11 +132,17 @@ pub unsafe fn write(list: *mut c_void, copy_list: bool, addr: u64, a: u32, b: u3
         }
         return;
     }
-    unsafe {
-        end(list, heap as *mut c_void, QUERY_TYPE_TIMESTAMP, idx);
-        if need { crate::fill::barrier_pub(list, e.res, before, during) };
-        resolve(list, heap as *mut c_void, QUERY_TYPE_TIMESTAMP, idx, 1, e.res as *mut c_void, off);
-        if need { crate::fill::barrier_pub(list, e.res, during, before) };
+    unsafe { end(list, heap as *mut c_void, QUERY_TYPE_TIMESTAMP, idx) };
+    let ok = if copy_list {
+        unsafe { crate::ts99::defer_dma(list, heap as *mut c_void, idx, e.res, off) }
+    } else {
+        unsafe { crate::ts99::emit(list, heap as *mut c_void, idx, 1, e.res, off, need.then_some(before)) }
+    };
+    if !ok {
+        if MISS.fetch_add(1, Ordering::Relaxed) < 8 {
+            record("d3d12_xs", "timestamp", &format!("addr={addr:#x}: GPU timestamp could not be converted to the console 99.75 MHz time base; not written"));
+        }
+        return;
     }
     if LOG.fetch_add(1, Ordering::Relaxed) < 4 {
         record("d3d12_xs", "timestamp", &format!("addr={addr:#x} -> res={:#x}+{off:#x} slot={idx} copyList={copy_list} args=({a},{b},{c})", e.res));

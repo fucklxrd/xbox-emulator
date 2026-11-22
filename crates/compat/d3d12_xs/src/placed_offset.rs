@@ -101,6 +101,7 @@ pub fn forget(res: usize) {
         }
     };
     for h in helpers {
+        crate::title_shadow::helper_gone(h);
         unsafe { release(h as *mut c_void) };
     }
 }
@@ -252,6 +253,30 @@ pub unsafe fn create(real: *mut c_void, va: u64, d: &[u8; 0x38], xbox_size: u64,
     Some(made)
 }
 
+pub unsafe fn place_in_heap(real: *mut c_void, heap: *mut c_void, offset: u64, d: &[u8; 0x38], init_state: u32, pclear: *const c_void, ppv: *mut *mut c_void) -> Option<i32> {
+    let (base, o, wide) = plan(offset, d)?;
+    let width = u64::from_le_bytes(d[0x10..0x18].try_into().unwrap());
+    let f: unsafe extern "system" fn(*mut c_void, *mut c_void, u64, *const u8, u32, *const c_void, *const Guid, *mut *mut c_void) -> i32 = unsafe { core::mem::transmute(*vt(real).add(DEV_PLACED)) };
+    let hr = unsafe { f(real, heap, base, wide.as_ptr(), init_state, pclear, &IID_RESOURCE, ppv) };
+    if hr < 0 || unsafe { *ppv }.is_null() {
+        record("d3d12_xs", "placed_offset", &format!("heap {heap:p} offset {offset:#x}: buffer widened to {:#x} at the 64 KB base {base:#x} was refused hr={hr:#010x}", width + o));
+        return Some(hr);
+    }
+    let res = unsafe { *ppv };
+    let flags = u32::from_le_bytes(d[0x30..0x34].try_into().unwrap());
+    set(res as usize, Off { bytes: o, width, heap: heap as usize, heap_off: base, real: real as usize, flags });
+    let ok = unsafe { attach_watch(res) } && unsafe { patch_get_desc(res) };
+    if !keep_or_abandon(res as usize, ok, || unsafe { release(res); *ppv = core::ptr::null_mut(); }) {
+        record("d3d12_xs", "placed_offset", &format!("heap {heap:p} offset {offset:#x}: release watch or GetDesc hook could not be attached, so the placement was dropped"));
+        return Some(0x8000_4005u32 as i32);
+    }
+    static N: AtomicUsize = AtomicUsize::new(0);
+    if N.fetch_add(1, Ordering::Relaxed) < 16 {
+        record("d3d12_xs", "placed_offset", &format!("CreatePlacedResource heap {heap:p} offset {offset:#x} width={width:#x}: console packing kept by placing at the 64 KB base {base:#x}, resource GPU VA offset {o:#x}"));
+    }
+    Some(hr)
+}
+
 pub fn helper_plan(pos: u64, stride: u64, heap_off: u64) -> Option<(u64, u64)> {
     if stride == 0 {
         return None;
@@ -289,7 +314,11 @@ unsafe fn helper(res: usize, off: Off, m: u64) -> Option<*mut c_void> {
     let real = off.real as *mut c_void;
     let f: unsafe extern "system" fn(*mut c_void, *mut c_void, u64, *const u8, u32, *const c_void, *const Guid, *mut *mut c_void) -> i32 = unsafe { core::mem::transmute(*vt(real).add(DEV_PLACED)) };
     let mut h: *mut c_void = core::ptr::null_mut();
-    let hr = unsafe { f(real, off.heap as *mut c_void, off.heap_off - m * PAGE, d.as_ptr(), 0, core::ptr::null(), &IID_RESOURCE, &mut h) };
+    let hr = if crate::title_shadow::is_shadow_heap(off.heap) {
+        unsafe { crate::title_shadow::place_helper(real, off.heap, off.heap_off - m * PAGE, &d, &mut h) }
+    } else {
+        unsafe { f(real, off.heap as *mut c_void, off.heap_off - m * PAGE, d.as_ptr(), 0, core::ptr::null(), &IID_RESOURCE, &mut h) }
+    };
     if hr < 0 || h.is_null() {
         record("d3d12_xs", "placed_offset", &format!("view helper buffer at heap {:#x}+{:#x} hr={hr:#010x}", off.heap, off.heap_off - m * PAGE));
         return None;
@@ -795,7 +824,10 @@ mod tests {
             assert!(h != b);
             let first = u64::from_le_bytes(v[0x10..0x18].try_into().unwrap());
             assert_eq!(first, 0x1_2000 / 12);
-            assert_eq!(vc!(h, 11, fn() -> u64) + first * 12, vc!(b, 11, fn() -> u64), "the view's first element is the buffer's first byte");
+            match crate::title_shadow::backing(b as usize) {
+                Some((heap, at)) => assert_eq!(crate::title_shadow::backing(h as usize), Some((heap, at - 0x1_0000)), "the shadowed helper maps the heap tile one 64 KB step below the buffer, so its element {first} is the buffer's first byte"),
+                None => assert_eq!(vc!(h, 11, fn() -> u64) + first * 12, vc!(b, 11, fn() -> u64), "the view's first element is the buffer's first byte"),
+            }
             let mut v2 = v;
             v2[0x10..0x18].copy_from_slice(&0u64.to_le_bytes());
             assert_eq!(exact_view(b as usize, &mut v2, crate::console_slots_dev2::SRV_BUFFER), Some(h), "the helper is shared by later views");

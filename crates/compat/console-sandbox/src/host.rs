@@ -162,6 +162,9 @@ pub unsafe extern "system" fn set_service_status(h: usize, status: *const u32) -
     st.copy_from_slice(std::slice::from_raw_parts(status, 7));
     t[h - 1].status = st;
     t[h - 1].history.push(st);
+    let name = t[h - 1].name.clone();
+    drop(t);
+    crate::notify::deliver(&name);
     1
 }
 
@@ -182,7 +185,11 @@ pub fn services_key(name: &str) -> String {
 }
 
 fn known(name: &str) -> bool {
-    service(name).is_some() || crate::registry::get(&services_key(name), "Type").is_some()
+    service(name).is_some() || crate::notify::builtin_running(name) || crate::registry::get(&services_key(name), "Type").is_some()
+}
+
+pub fn service_handle_name(h: usize) -> Option<String> {
+    handle_name(h)
 }
 
 fn handle_name(h: usize) -> Option<String> {
@@ -225,6 +232,7 @@ pub unsafe extern "system" fn close_service_handle(h: usize) -> i32 {
         return 1;
     }
     if handle_name(h).is_some() {
+        crate::notify::cancel(h);
         handles()[(h - SVC_HANDLE_BASE) / 4 - 1] = String::new();
         return 1;
     }
@@ -248,12 +256,8 @@ pub unsafe extern "system" fn query_service_status_ex(h: usize, level: u32, buf:
         SetLastError(ERROR_INSUFFICIENT_BUFFER);
         return 0;
     }
-    let st = service(&n).map(|s| s.status).unwrap_or([0x10, SERVICE_STOPPED, 0, 1077, 0, 0, 0]);
-    let mut st = st;
-    if st[1] == 0 {
-        st = [0x10, SERVICE_STOPPED, 0, 1077, 0, 0, 0];
-    }
-    let words: [u32; 9] = [st[0], st[1], st[2], st[3], st[4], st[5], st[6], if st[1] == SERVICE_STOPPED { 0 } else { std::process::id() }, 0];
+    let st = crate::notify::status_of(&n);
+    let words: [u32; 9] = [st[0], st[1], st[2], st[3], st[4], st[5], st[6], crate::notify::pid_of(&st), 0];
     core::ptr::copy_nonoverlapping(words.as_ptr() as *const u8, buf, 36);
     1
 }

@@ -11,9 +11,9 @@
 11 XGCreateTexture3DComputer implemented
 12 XGCreateTextureComputer implemented | D3D12 desc to XG desc conversion
 13 XGCreateTextureComputerFromDescriptor implemented | depth descriptor layouts not modelled, oracle shows remaining mismatches
-14 XGDecodeDCC stub | console multi-stage DCC decoder not ported, returns E_NOTIMPL
+14 XGDecodeDCC implemented | full port of console decoder 0x23210 (unpack, tid swizzle, debase, dedelta, color, signfix, channel, constant, relayout); matches console bytes+hr in oracle_dcc_dec_e2e / oracle_dcc_dec_stages / oracle_dcc_decode_export_shim; native returns E_INVALIDARG (recorded) only where the console output is undefined, proven in oracle_dcc_dec_undefined_classes: color stage integer-divide fault (bpe<4), tid-swizzle convert holes filled from caller stack (incl. return addresses), and segments never written this call (prior buffer bytes); console returns S_OK with junk there and continues, native stops at that block so later blocks are unwritten; negative format rejected (console indexes its format table out of bounds)
 15 XGEnableExclusiveLocking implemented
-16 XGEncodeDCC stub | console multi-stage DCC encoder not ported, returns E_NOTIMPL
+16 XGEncodeDCC implemented | encoder 0x26220 ported (src/dcc/enc.rs) and byte-exact with the console wherever accepted; E_INVALIDARG only for proven-undefined console results (color #DE; relayout 0x4ac90 and convert 0x4adc0 stack-scratch holes whose contents depend on stack, buffer address or the C runtime vsprintf frame); see BLOCKERS.md xg_xs XGEncodeDCC
 17 XGEnterExclusiveLock implemented
 18 XGInitializeLibrary implemented
 19 XGLeaveExclusiveLock implemented

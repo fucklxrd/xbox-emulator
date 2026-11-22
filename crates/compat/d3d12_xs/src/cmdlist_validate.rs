@@ -413,6 +413,7 @@ unsafe fn replay_one(list: *mut c_void, r: &Rec) {
         a[*i] = b.as_ptr() as u64;
         if r.xslot == 26 && *i == 1 {
             if let Some(v) = crate::xone_barrier::sanitize(r.a[0] as u32, b.as_ptr()) {
+                a[0] = (v.len() / 32) as u64;
                 fixed.push(v);
                 a[1] = fixed.last().unwrap().as_ptr() as u64;
             }
@@ -1207,12 +1208,14 @@ unsafe extern "system" fn create_query_heap(this: *mut c_void, desc: *const u32,
     hr
 }
 
+pub const DEV_SLOT_CREATE_QUERY_HEAP: usize = 39;
+
 pub fn hook_device(v: &mut [usize]) {
-    if !enabled() || v.len() <= 32 {
+    if !enabled() || v.len() <= DEV_SLOT_CREATE_QUERY_HEAP {
         return;
     }
     DEV_RS.store(v[16], Ordering::Relaxed);
     v[16] = create_root_signature as usize;
-    DEV_QH.store(v[32], Ordering::Relaxed);
-    v[32] = create_query_heap as usize;
+    DEV_QH.store(v[DEV_SLOT_CREATE_QUERY_HEAP], Ordering::Relaxed);
+    v[DEV_SLOT_CREATE_QUERY_HEAP] = create_query_heap as usize;
 }

@@ -2,7 +2,7 @@
 name = "xfrontpaneldisplay"
 version = "0.1.0"
 edition = "2021"
-description = "Compat DLL for XFrontPanelDisplay.dll: reports no front panel (retail behaviour) and accepts the panel calls as no-ops."
+description = "Compat DLL for XFrontPanelDisplay.dll: forwards the panel calls to XFP_GC as the console does, so with no panel every call returns the connect failure."
 license = "MIT OR Apache-2.0"
 build = "build.rs"
 

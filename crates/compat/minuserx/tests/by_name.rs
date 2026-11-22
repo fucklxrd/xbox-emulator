@@ -172,3 +172,71 @@ fn every_implemented_row_is_named_here() {
         }
     }
 }
+
+#[repr(C)]
+struct WndClassExA {
+    size: u32,
+    style: u32,
+    proc_: usize,
+    cls_extra: i32,
+    wnd_extra: i32,
+    inst: *mut c_void,
+    icon: *mut c_void,
+    cursor: *mut c_void,
+    bg: *mut c_void,
+    menu: *const u8,
+    name: *const u8,
+    icon_sm: *mut c_void,
+}
+
+#[link(name = "user32")]
+extern "system" {
+    fn GetModuleHandleW(n: *const u16) -> *mut c_void;
+    fn RegisterClassExA(c: *const WndClassExA) -> u16;
+    fn UnregisterClassA(n: *const u8, inst: *mut c_void) -> i32;
+    fn CreateWindowExA(ex: u32, cls: *const u8, name: *const u8, style: u32, x: i32, y: i32, w: i32, h: i32, parent: *mut c_void, menu: *mut c_void, inst: *mut c_void, p: *mut c_void) -> *mut c_void;
+    fn DefWindowProcA(h: *mut c_void, m: u32, w: usize, l: isize) -> isize;
+    fn IsWindowUnicode(h: *mut c_void) -> i32;
+}
+
+const GWLP_WNDPROC: i32 = -4;
+const GWLP_USERDATA: i32 = -21;
+
+unsafe extern "system" fn proc_a(h: *mut c_void, m: u32, w: usize, l: isize) -> isize {
+    DefWindowProcA(h, m, w, l)
+}
+
+unsafe extern "system" fn proc_b(h: *mut c_void, m: u32, w: usize, l: isize) -> isize {
+    DefWindowProcA(h, m, w, l)
+}
+
+type GetLong = unsafe extern "system" fn(*mut c_void, i32) -> isize;
+type SetLong = unsafe extern "system" fn(*mut c_void, i32, isize) -> isize;
+
+#[test]
+fn ansi_window_wndproc_reads_back_registered_proc() {
+    let get_a: GetLong = unsafe { core::mem::transmute(export("GetWindowLongPtrA")) };
+    let get_w: GetLong = unsafe { core::mem::transmute(export("GetWindowLongPtrW")) };
+    let set_a: SetLong = unsafe { core::mem::transmute(export("SetWindowLongPtrA")) };
+    let set_w: SetLong = unsafe { core::mem::transmute(export("SetWindowLongPtrW")) };
+    unsafe {
+        let inst = GetModuleHandleW(null_mut());
+        let name = b"TomboxMuxAnsiLong\0";
+        let c = WndClassExA { size: core::mem::size_of::<WndClassExA>() as u32, style: 0, proc_: proc_a as usize, cls_extra: 0, wnd_extra: 0, inst, icon: null_mut(), cursor: null_mut(), bg: null_mut(), menu: core::ptr::null(), name: name.as_ptr(), icon_sm: null_mut() };
+        assert_ne!(RegisterClassExA(&c), 0);
+        let h = CreateWindowExA(0, name.as_ptr(), b"t\0".as_ptr(), 0, 0, 0, 10, 10, null_mut(), null_mut(), inst, null_mut());
+        assert!(!h.is_null());
+        assert_eq!(IsWindowUnicode(h), 0);
+        assert_eq!(get_a(h, GWLP_WNDPROC) as usize, proc_a as usize);
+        assert_eq!(get_w(h, GWLP_WNDPROC) as usize, proc_a as usize);
+        assert_eq!(set_a(h, GWLP_WNDPROC, proc_b as isize) as usize, proc_a as usize);
+        assert_eq!(get_a(h, GWLP_WNDPROC) as usize, proc_b as usize);
+        assert_eq!(set_w(h, GWLP_WNDPROC, proc_a as isize) as usize, proc_b as usize);
+        assert_eq!(IsWindowUnicode(h), 0);
+        assert_eq!(get_a(h, GWLP_WNDPROC) as usize, proc_a as usize);
+        assert_eq!(set_a(h, GWLP_USERDATA, 0x1234), 0);
+        assert_eq!(get_w(h, GWLP_USERDATA), 0x1234);
+        DestroyWindow(h);
+        UnregisterClassA(name.as_ptr(), inst);
+    }
+}

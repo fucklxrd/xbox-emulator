@@ -1,0 +1,10 @@
+1 XAudio2Create implemented | host XAudio2CreateWithVersionInfo(NTDDI_WIN10) with the console processor mask mapped (console_processor) and, unless XAUDIO2_DO_NOT_USE_SHAPE, the engine wrapped (engine::wrap) so XMA2 source voices are decoded by the crate (src/lib.rs XAudio2Create)
+2 CreateAudioReverb forwarded | calls the host System32 XAudio2_9 CreateAudioReverb unchanged
+3 CreateAudioVolumeMeter forwarded | calls the host CreateAudioVolumeMeter unchanged
+4 CreateFX forwarded | the four console XAPOFX CLSIDs go to the host CreateFX; any other CLSID goes to GCXAudioExt PlatformSpecificXAPOFXFactory (crates/compat/gcxaudioext)
+5 X3DAudioCalculate forwarded | calls the host X3DAudioCalculate unchanged; logs and leaves the DSP settings untouched when the host export is missing
+6 X3DAudioInitialize forwarded | calls the host X3DAudioInitialize unchanged
+7 CreateAudioReverbV2_8 forwarded | calls the host CreateAudioReverbV2_8 unchanged
+8 XAudio2CreateV2_9 implemented | alias of XAudio2Create at ordinal 8 (build.rs EXPORTS XAudio2CreateV2_9=XAudio2Create)
+9 XAudio2CreateWithVersionInfo implemented | same path as XAudio2Create with the caller's NTDDI version
+10 XAudio2CreateWithSharedContexts implemented | host XAudio2CreateWithSharedContexts with the console processor mask mapped and the engine wrapped for XMA2 like XAudio2Create

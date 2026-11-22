@@ -21,6 +21,58 @@ static CONSOLE_MODE: AtomicUsize = AtomicUsize::new(0);
 pub const OEM_KEY: &str = "Software\\Microsoft\\Windows NT\\CurrentVersion\\OEM";
 const HKLM: usize = 0xffff_ffff_8000_0002;
 const SENTINEL: usize = 0x5842_4F58_4F45_4D11;
+pub const PASSWORDLESS_DEVICE_KEY: &str = "SOFTWARE\\Microsoft\\Windows NT\\CurrentVersion\\PasswordLess\\Device";
+const SENTINEL_PASSWORDLESS: usize = 0x5842_4F58_5057_4C11;
+
+pub fn emulated_hklm_key(root: &std::path::Path, sub: &str) -> Option<std::path::PathBuf> {
+    if !sub.eq_ignore_ascii_case(PASSWORDLESS_DEVICE_KEY) {
+        return None;
+    }
+    Some(sub.split('\\').filter(|c| !c.is_empty()).fold(root.join("hklm"), |a, c| a.join(c)))
+}
+
+pub fn emulated_hklm_open(root: &std::path::Path, sub: &str) -> Option<i32> {
+    let dir = emulated_hklm_key(root, sub)?;
+    Some(if dir.is_dir() { 0 } else { 2 })
+}
+
+pub fn emulated_hklm_dword(root: &std::path::Path, value: &str) -> Option<u32> {
+    let dir = emulated_hklm_key(root, PASSWORDLESS_DEVICE_KEY)?;
+    std::fs::read_to_string(dir.join(format!("{value}.dword"))).ok()?.trim().parse().ok()
+}
+
+unsafe fn emulated_open(hkey: usize, sub: *const u16, out: *mut usize) -> Option<i32> {
+    if hkey != HKLM || CONSOLE_MODE.load(Ordering::Relaxed) == 0 || out.is_null() {
+        return None;
+    }
+    let r = emulated_hklm_open(&super::data_root(), &super::wstr(sub)?)?;
+    if r == 0 {
+        *out = SENTINEL_PASSWORDLESS;
+    }
+    Some(r)
+}
+
+unsafe fn query_emulated_dword(name: *const u16, kind: *mut u32, data: *mut u8, cb: *mut u32) -> i32 {
+    let Some(v) = super::wstr(name).and_then(|n| emulated_hklm_dword(&super::data_root(), &n)) else {
+        return 2;
+    };
+    if !kind.is_null() {
+        *kind = 4;
+    }
+    if !data.is_null() {
+        if cb.is_null() || *cb < 4 {
+            if !cb.is_null() {
+                *cb = 4;
+            }
+            return 234;
+        }
+        core::ptr::write_unaligned(data as *mut u32, v);
+    }
+    if !cb.is_null() {
+        *cb = 4;
+    }
+    0
+}
 
 fn wide(s: &str) -> Vec<u16> {
     s.encode_utf16().chain(Some(0)).collect()
@@ -81,6 +133,9 @@ unsafe extern "system" fn reg_open_hook(hkey: usize, sub: *const u16, out: *mut 
         *out = SENTINEL;
         return 0;
     }
+    if let Some(r) = emulated_open(hkey, sub, out) {
+        return r;
+    }
     let f: unsafe extern "system" fn(usize, *const u16, *mut usize) -> i32 = core::mem::transmute(ORIG_REG_OPEN.load(Ordering::Acquire));
     f(hkey, sub, out)
 }
@@ -89,6 +144,9 @@ unsafe extern "system" fn reg_open_ex_hook(hkey: usize, sub: *const u16, opts: u
     if is_oem(hkey, sub) && !out.is_null() {
         *out = SENTINEL;
         return 0;
+    }
+    if let Some(r) = emulated_open(hkey, sub, out) {
+        return r;
     }
     let f: unsafe extern "system" fn(usize, *const u16, u32, u32, *mut usize) -> i32 = core::mem::transmute(ORIG_REG_OPEN_EX.load(Ordering::Acquire));
     f(hkey, sub, opts, sam, out)
@@ -121,12 +179,15 @@ unsafe extern "system" fn reg_query_hook(hkey: usize, name: *const u16, reserved
     if hkey == SENTINEL {
         return query_console_mode(name, kind, data, cb);
     }
+    if hkey == SENTINEL_PASSWORDLESS {
+        return query_emulated_dword(name, kind, data, cb);
+    }
     let f: unsafe extern "system" fn(usize, *const u16, *mut u32, *mut u32, *mut u8, *mut u32) -> i32 = core::mem::transmute(ORIG_REG_QUERY.load(Ordering::Acquire));
     f(hkey, name, reserved, kind, data, cb)
 }
 
 unsafe extern "system" fn reg_close_hook(hkey: usize) -> i32 {
-    if hkey == SENTINEL {
+    if hkey == SENTINEL || hkey == SENTINEL_PASSWORDLESS {
         return 0;
     }
     let f: unsafe extern "system" fn(usize) -> i32 = core::mem::transmute(ORIG_REG_CLOSE.load(Ordering::Acquire));
@@ -247,6 +308,8 @@ fn lists() -> (Vec<(&'static str, usize, &'static AtomicUsize)>, Vec<(&'static s
     let base: Vec<(&'static str, usize, &'static AtomicUsize)> = targets(registry).iter().map(|x| (x.name, x.hook, x.orig)).collect();
     let mut title = base.clone();
     title.extend(super::identity::targets());
+    title.extend(super::memstatus::targets());
+    title.extend(crate::kmd_bridge::targets());
     (base, title)
 }
 
@@ -329,4 +392,25 @@ pub fn install() -> String {
         s.push_str("; WARNING xgameruntime.dll was already loaded - a title that resolved QueryApiImpl earlier keeps the real runtime");
     }
     s
+}
+
+#[cfg(test)]
+mod emulated_hklm_tests {
+    use super::*;
+
+    #[test]
+    fn passwordless_device_key_reads_the_emulated_hklm_store() {
+        let root = std::env::temp_dir().join(format!("tombox_cc_hklm_{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        assert_eq!(emulated_hklm_open(&root, "Software\\Microsoft\\Windows NT\\CurrentVersion\\OEM"), None);
+        assert_eq!(emulated_hklm_open(&root, PASSWORDLESS_DEVICE_KEY), Some(2));
+        assert_eq!(emulated_hklm_dword(&root, "DevicePasswordLessBuildVersion"), None);
+        let dir = emulated_hklm_key(&root, &PASSWORDLESS_DEVICE_KEY.to_ascii_lowercase()).unwrap();
+        std::fs::create_dir_all(&dir).unwrap();
+        assert_eq!(emulated_hklm_open(&root, PASSWORDLESS_DEVICE_KEY), Some(0));
+        std::fs::write(dir.join("DevicePasswordLessBuildVersion.dword"), "2\n").unwrap();
+        assert_eq!(emulated_hklm_dword(&root, "DevicePasswordLessBuildVersion"), Some(2));
+        assert_eq!(emulated_hklm_dword(&root, "Other"), None);
+        let _ = std::fs::remove_dir_all(&root);
+    }
 }

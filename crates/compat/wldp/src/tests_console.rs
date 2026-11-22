@@ -239,3 +239,58 @@ fn userprofile_substitution_matches_console() {
         assert_eq!((hr, out), (0x1000_0000, None));
     }
 }
+
+fn tm_system32() -> PathBuf {
+    PathBuf::from(TM_WLDP).parent().unwrap().to_path_buf()
+}
+
+fn utf16(s: &str) -> Vec<u8> {
+    s.encode_utf16().flat_map(|c| c.to_le_bytes()).collect()
+}
+
+#[test]
+fn wldp_send_smart_app_control_block_toast() {
+    assert_eq!(console_activate_xml_document(CO_E_NOTINITIALIZED), CO_E_NOTINITIALIZED);
+    assert_eq!(console_activate_xml_document(0), REGDB_E_CLASSNOTREG);
+    assert_eq!(send_smart_app_control_block_toast_in(0), REGDB_E_CLASSNOTREG);
+    assert_eq!(send_smart_app_control_block_toast_in(CO_E_NOTINITIALIZED), CO_E_NOTINITIALIZED);
+    let dir = tm_system32();
+    let Ok(software) = std::fs::read(dir.join("config").join("SOFTWARE")) else { return };
+    let class = XML_DOCUMENT_CLASS;
+    assert!(!software.windows(class.len()).any(|w| w == class.as_bytes()));
+    let wc = utf16(class);
+    assert!(!software.windows(wc.len()).any(|w| w == wc.as_slice()));
+    assert!(software.windows(18).any(|w| w == b"ActivatableClassId"));
+    assert!(!dir.join("msxml6.dll").exists());
+    let dll = std::fs::read(TM_WLDP).unwrap();
+    assert!(dll.windows(wc.len()).any(|w| w == wc.as_slice()));
+}
+
+#[test]
+fn wldp_send_smart_app_control_block_toast_export() {
+    let f = || unsafe { WldpSendSmartAppControlBlockToast(wide("C:\\x.exe").as_ptr(), core::ptr::null()) };
+    let uninit = std::thread::spawn(move || (console_apartment_status(), f())).join().unwrap();
+    if uninit.0 == CO_E_NOTINITIALIZED {
+        assert_eq!(uninit.1, CO_E_NOTINITIALIZED);
+    } else {
+        assert_eq!(uninit.1, REGDB_E_CLASSNOTREG);
+    }
+    #[link(name = "ole32")]
+    extern "system" {
+        fn CoInitializeEx(r: *mut core::ffi::c_void, flags: u32) -> i32;
+        fn CoUninitialize();
+    }
+    for flags in [0u32, 2] {
+        let r = std::thread::spawn(move || unsafe {
+            let ok = CoInitializeEx(core::ptr::null_mut(), flags) >= 0;
+            let hr = f();
+            if ok {
+                CoUninitialize();
+            }
+            hr
+        })
+        .join()
+        .unwrap();
+        assert_eq!(r, REGDB_E_CLASSNOTREG);
+    }
+}

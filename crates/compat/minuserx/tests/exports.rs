@@ -186,6 +186,6 @@ fn exports_txt_covers_the_console_ordinal_table() {
     ords.sort_unstable();
     assert_eq!(ords, (2534..=2607).collect::<Vec<_>>());
     let st = |s: &str| rows.iter().filter(|l| l.split_whitespace().nth(2) == Some(s)).count();
-    assert_eq!(st("forwarded"), 42);
-    assert_eq!(st("implemented"), 32);
+    assert_eq!(st("forwarded"), 38);
+    assert_eq!(st("implemented"), 36);
 }

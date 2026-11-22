@@ -2,7 +2,7 @@ use core::ffi::c_void;
 use core::sync::atomic::{AtomicBool, AtomicU32, AtomicUsize, Ordering};
 use compat_common::record;
 
-pub const SET_MASK: u32 = 0x81f0_0001;
+pub const SET_MASK: u32 = 0x83f0_0001;
 pub const FLAG_DEBUG: u32 = 0x0000_0001;
 pub const FLAG_INSTRUMENTED: u32 = 0x0010_0000;
 pub const FLAG_DEBUG_STOCK: u32 = 0x8000_0000;
@@ -133,7 +133,7 @@ mod tests {
     fn set_masks_and_get_returns_stored_value() {
         let _g = T.lock().unwrap_or_else(|e| e.into_inner());
         assert_eq!(D3D12XboxSetProcessDebugFlags(0xffff_ffff), 0);
-        assert_eq!(D3D12XboxGetProcessDebugFlags(), 0x81f0_0001);
+        assert_eq!(D3D12XboxGetProcessDebugFlags(), 0x83f0_0001);
         assert_eq!(D3D12XboxSetProcessDebugFlags(0x0000_0201), 0);
         assert_eq!(D3D12XboxGetProcessDebugFlags(), 0x0000_0001);
         assert_eq!(D3D12XboxSetProcessDebugFlags(0x0010_0000), 0);

@@ -7,6 +7,9 @@ mod xgs_kmd;
 mod pixie;
 mod microcode;
 mod driver_call;
+pub mod rs_strip;
+#[cfg(test)]
+mod rs_strip_tests;
 
 use compat_common::{record, E_FAIL, S_OK};
 use core::ffi::c_void;
@@ -103,6 +106,7 @@ pub extern "system" fn D3D12XboxCreateDevice(
     riid: *const c_void,
     pp_device: *mut *mut c_void,
 ) -> i32 {
+    let _ = xgs_kmd_emu::api();
     if params.is_null() {
         record(M, "D3D12XboxCreateDevice", "null parameters -> E_INVALIDARG");
         return E_INVALIDARG;
@@ -111,22 +115,59 @@ pub extern "system" fn D3D12XboxCreateDevice(
         return S_FALSE;
     }
     unsafe { *pp_device = core::ptr::null_mut() };
+    let xone = unsafe { core::slice::from_raw_parts(params as *const u8, XONE_PARAMS_BYTES) };
+    let xs_params = scarlett_params(xone);
+    DEBUG_FLAGS.store(xs_params[1], Ordering::Relaxed);
     let xs = proc_in(scarlett_runtime(), b"D3D12XboxCreateDevice\0");
     if xs != 0 {
         let f: unsafe extern "system" fn(*mut c_void, *const c_void, *const c_void, *mut *mut c_void) -> i32 =
             unsafe { core::mem::transmute(xs) };
-        let hr = unsafe { f(adapter, params, riid, pp_device) };
-        record(M, "D3D12XboxCreateDevice", &format!("Xbox One params -> d3d12_xs device {:p} hr={hr:#010x}", unsafe { *pp_device }));
+        let hr = unsafe { f(adapter, xs_params.as_ptr() as *const c_void, riid, pp_device) };
+        record(M, "D3D12XboxCreateDevice", &format!("Xbox One params version {:#x} flags {:#x} -> Scarlett version {:#x}; d3d12_xs device {:p} hr={hr:#010x}", xone_params_version(xone), xs_params[1], xs_params[0], unsafe { *pp_device }));
         return hr;
     }
-    let hr = D3D12CreateDevice(core::ptr::null_mut(), D3D_FEATURE_LEVEL_12_0, riid, pp_device);
+    let hr = host_create_device(core::ptr::null_mut(), D3D_FEATURE_LEVEL_12_0, riid, pp_device);
     record(M, "D3D12XboxCreateDevice", &format!("d3d12_xs.dll unavailable; unwrapped host device hr={hr:#010x}"));
     hr
 }
 
 #[no_mangle]
 pub extern "system" fn D3D12CreateDevice(adapter: *mut c_void, level: u32, riid: *const c_void, pp: *mut *mut c_void) -> i32 {
+    let params = default_xone_params(D3D12XboxGetProcessDebugFlags());
+    record(M, "D3D12CreateDevice", &format!("feature level {level:#x} ignored as on console; D3D12XboxCreateDevice with version {:#x} flags {:#x}", params[0], params[1]));
+    D3D12XboxCreateDevice(adapter, params.as_ptr() as *const c_void, riid, pp)
+}
+
+fn host_create_device(adapter: *mut c_void, level: u32, riid: *const c_void, pp: *mut *mut c_void) -> i32 {
     forward!(host_d3d12(), "D3D12CreateDevice", fn(adapter: *mut c_void, level: u32, riid: *const c_void, pp: *mut *mut c_void) -> i32)
+}
+
+pub const XONE_PARAMS_VERSION: u32 = 0x1000a;
+pub const XONE_PARAMS_BYTES: usize = 0x28;
+pub const XS_PARAMS_VERSION: u32 = 0x20004;
+pub const XS_PARAMS_DWORDS: usize = 0x48 / 4;
+
+pub fn default_xone_params(flags: u32) -> [u32; XONE_PARAMS_BYTES / 4] {
+    let mut p = [0u32; XONE_PARAMS_BYTES / 4];
+    p[0] = XONE_PARAMS_VERSION;
+    p[1] = flags;
+    p[2] = u32::MAX;
+    p[6] = u32::MAX;
+    p[7] = u32::MAX;
+    p
+}
+
+fn xone_params_version(xone: &[u8]) -> u32 {
+    u32::from_le_bytes(xone[0..4].try_into().unwrap())
+}
+
+pub fn scarlett_params(xone: &[u8]) -> [u32; XS_PARAMS_DWORDS] {
+    let mut p = [0u32; XS_PARAMS_DWORDS];
+    for (i, c) in xone.chunks_exact(4).take(XONE_PARAMS_BYTES / 4).enumerate() {
+        p[i] = u32::from_le_bytes(c.try_into().unwrap());
+    }
+    p[0] = XS_PARAMS_VERSION;
+    p
 }
 
 #[no_mangle]
@@ -136,22 +177,38 @@ pub extern "system" fn D3D12GetDebugInterface(riid: *const c_void, pp: *mut *mut
 
 #[no_mangle]
 pub extern "system" fn D3D12SerializeRootSignature(desc: *const c_void, version: u32, blob: *mut *mut c_void, err: *mut *mut c_void) -> i32 {
-    forward!(host_d3d12(), "D3D12SerializeRootSignature", fn(desc: *const c_void, version: u32, blob: *mut *mut c_void, err: *mut *mut c_void) -> i32)
+    let p = proc_in(host_d3d12(), b"D3D12SerializeRootSignature\0");
+    if p == 0 {
+        return E_FAIL;
+    }
+    unsafe { rs_strip::serialize(core::mem::transmute(p), desc, version, blob, err) }
 }
 
 #[no_mangle]
 pub extern "system" fn D3D12SerializeVersionedRootSignature(desc: *const c_void, blob: *mut *mut c_void, err: *mut *mut c_void) -> i32 {
-    forward!(host_d3d12(), "D3D12SerializeVersionedRootSignature", fn(desc: *const c_void, blob: *mut *mut c_void, err: *mut *mut c_void) -> i32)
+    let p = proc_in(host_d3d12(), b"D3D12SerializeVersionedRootSignature\0");
+    if p == 0 {
+        return E_FAIL;
+    }
+    unsafe { rs_strip::serialize_versioned(core::mem::transmute(p), desc, blob, err) }
 }
 
 #[no_mangle]
 pub extern "system" fn D3D12CreateRootSignatureDeserializer(data: *const c_void, size: usize, riid: *const c_void, pp: *mut *mut c_void) -> i32 {
-    forward!(host_d3d12(), "D3D12CreateRootSignatureDeserializer", fn(data: *const c_void, size: usize, riid: *const c_void, pp: *mut *mut c_void) -> i32)
+    let p = proc_in(host_d3d12(), b"D3D12CreateRootSignatureDeserializer\0");
+    if p == 0 {
+        return E_FAIL;
+    }
+    unsafe { rs_strip::deserializer(core::mem::transmute(p), false, data, size, riid, pp) }
 }
 
 #[no_mangle]
 pub extern "system" fn D3D12CreateVersionedRootSignatureDeserializer(data: *const c_void, size: usize, riid: *const c_void, pp: *mut *mut c_void) -> i32 {
-    forward!(host_d3d12(), "D3D12CreateVersionedRootSignatureDeserializer", fn(data: *const c_void, size: usize, riid: *const c_void, pp: *mut *mut c_void) -> i32)
+    let p = proc_in(host_d3d12(), b"D3D12CreateVersionedRootSignatureDeserializer\0");
+    if p == 0 {
+        return E_FAIL;
+    }
+    unsafe { rs_strip::deserializer(core::mem::transmute(p), true, data, size, riid, pp) }
 }
 
 #[no_mangle]
@@ -194,6 +251,7 @@ mod tests {
     fn debug_flags_round_trip_with_real_mask() {
         assert_eq!(D3D12XboxSetProcessDebugFlags(0xffff_ffff), S_OK);
         assert_eq!(D3D12XboxGetProcessDebugFlags(), 0x81f0_0001);
+        assert_eq!(default_xone_params(D3D12XboxGetProcessDebugFlags())[1], 0x81f0_0001);
         D3D12XboxSetProcessDebugFlags(0);
         assert_eq!(D3D12XboxGetProcessDebugFlags(), 0);
     }

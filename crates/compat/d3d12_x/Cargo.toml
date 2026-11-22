@@ -13,6 +13,7 @@ path = "src/lib.rs"
 
 [dependencies]
 compat-common = { path = "../compat-common" }
+xgs-kmd-emu = { path = "../xgs-kmd-emu" }
 
 [build-dependencies]
 xone-exports = { path = "../xone-exports" }

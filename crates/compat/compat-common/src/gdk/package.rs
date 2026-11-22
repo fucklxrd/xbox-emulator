@@ -29,7 +29,8 @@ pub struct Layout {
 }
 
 pub const READY: u32 = 0;
-pub const UNAVAILABLE: u32 = 4;
+pub const UNAVAILABLE: u32 = 3;
+pub const E_GAMEPACKAGE_INVALID_SELECTOR: i32 = 0x8924_5203u32 as i32;
 
 impl Layout {
     pub fn select(&self, kind: u32, value: &str, chunk: u32) -> Vec<u32> {
@@ -223,7 +224,7 @@ unsafe fn resolve(n: u32, sel: *const Selector) -> Result<Vec<u32>, i32> {
             _ => return Err(E_INVALIDARG),
         };
         if found.is_empty() {
-            return Err(super::E_NOT_FOUND);
+            return Err(E_GAMEPACKAGE_INVALID_SELECTOR);
         }
         for c in found {
             if !out.contains(&c) {
@@ -316,7 +317,7 @@ unsafe extern "system" fn find_chunk_availability(_t: This, id: *const u8, n: u3
             *out = READY;
             S_OK
         }
-        Err(e) if e == super::E_NOT_FOUND => {
+        Err(e) if e == E_GAMEPACKAGE_INVALID_SELECTOR => {
             *out = UNAVAILABLE;
             S_OK
         }
@@ -407,7 +408,7 @@ unsafe extern "system" fn enumerate_packages(_t: This, kind: u32, scope: u32, ct
     let empty = CString::new("").unwrap_or_default();
     let tid = CString::new(t.title_id.map(|x| format!("{x:08X}")).unwrap_or_default()).unwrap_or_default();
     let v = t.version;
-    let version = (v[3] as u64) | ((v[2] as u64) << 16) | ((v[1] as u64) << 32) | ((v[0] as u64) << 48);
+    let version = xversion(v);
     let mut d = [0u8; 0x60];
     let p = d.as_mut_ptr();
     core::ptr::write_unaligned(p as *mut usize, id.as_ptr() as usize);
@@ -658,4 +659,8 @@ pub fn interfaces() -> Vec<Iface> {
         Iface { clsid: CLSID, iid: IID_V1, name: "XPackage(be3f3e9f)", slots: v1 },
         Iface { clsid: CLSID, iid: IID_V2, name: "XPackage(f92d8712)", slots: v2 },
     ]
+}
+
+pub fn xversion(v: [u16; 4]) -> u64 {
+    (v[0] as u64) | ((v[1] as u64) << 16) | ((v[2] as u64) << 32) | ((v[3] as u64) << 48)
 }

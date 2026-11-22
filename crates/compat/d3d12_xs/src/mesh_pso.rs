@@ -27,7 +27,8 @@ pub fn inner_layout(ty: u32) -> Option<(usize, usize)> {
         8 => (4, 328),
         9 | 13 | 14 | 16 | 18 | 20 => (4, 4),
         10 => (4, 44),
-        11 | 21 => (4, 52),
+        11 => (4, 52),
+        21 => (4, 56),
         12 | 19 => (8, 16),
         15 => (4, 36),
         17 => (4, 8),
@@ -78,19 +79,13 @@ pub fn validate(stream: &[u8], subs: &[(u32, usize)]) -> Result<(), String> {
 
 pub const AS_ROOT_FLAG_ERR: &str = "When an amplification shader is used, the root signature must use D3D12XBOX_ROOT_SIGNATURE_FLAG_FORCE_MEMORY_BASED_ABI flag";
 
-fn pipeline_root(stream: &[u8], subs: &[(u32, usize)]) -> u64 {
-    subs.iter().find(|(t, _)| *t == SUB_ROOT_SIGNATURE)
-        .map(|(_, o)| u64::from_le_bytes(stream[*o..*o + 8].try_into().unwrap()))
-        .unwrap_or(0)
-}
-
 pub fn as_root_rule(stream: &[u8], subs: &[(u32, usize)], flags_of: &dyn Fn(u64) -> Option<u32>) -> Result<(), String> {
     let code = |t: u32| subs.iter().find(|(x, _)| *x == t).map(|(_, o)| bytecode(stream, *o)).filter(|(p, n)| *p != 0 && *n != 0);
     let Some((ap, an)) = code(SUB_AS) else { return Ok(()) };
     if code(SUB_MS).is_none() {
         return Ok(());
     }
-    let rs = pipeline_root(stream, subs);
+    let rs = subs.iter().find(|(t, _)| *t == SUB_ROOT_SIGNATURE).map(|(_, o)| u64::from_le_bytes(stream[*o..*o + 8].try_into().unwrap())).unwrap_or(0);
     let flags = if rs != 0 {
         flags_of(rs).ok_or_else(|| format!("amplification PSO root signature {rs:#x} was not created through the console CreateRootSignature, its flags are unknown"))?
     } else {
@@ -118,15 +113,11 @@ pub fn stage_rtfmt(ty: u32, (n, f): (u32, [u32; 8])) -> [u8; 8] {
 
 pub fn translate_stream(stream: &[u8], xlat: &dyn Fn(u32, &[u8], (u32, [u32; 8])) -> Result<Arc<Vec<u8>>, String>) -> Result<(Vec<u8>, Vec<Arc<Vec<u8>>>), String> {
     let subs = parse(stream)?;
-    translate_subobjects(stream, &subs, xlat)
-}
-
-fn translate_subobjects(stream: &[u8], subs: &[(u32, usize)], xlat: &dyn Fn(u32, &[u8], (u32, [u32; 8])) -> Result<Arc<Vec<u8>>, String>) -> Result<(Vec<u8>, Vec<Arc<Vec<u8>>>), String> {
-    validate(stream, subs)?;
-    let rts = rt_formats(stream, subs);
+    validate(stream, &subs)?;
+    let rts = rt_formats(stream, &subs);
     let mut out = stream.to_vec();
     let mut keep = Vec::new();
-    for &(ty, inner) in subs {
+    for (ty, inner) in subs {
         if !matches!(ty, 1..=6 | SUB_AS | SUB_MS) {
             continue;
         }
@@ -152,26 +143,23 @@ pub unsafe fn create_pipeline_state(real: *mut c_void, desc: *const [u64; 2], ri
         return E_INVALIDARG;
     }
     let stream = core::slice::from_raw_parts(ptr as *const u8, size as usize);
-    let subs = match parse(stream).and_then(|subs| {
-        as_root_rule(stream, &subs, &|rs| crate::console_slots_mesh::root_flags(rs as usize))?;
-        Ok(subs)
-    }) {
-        Ok(subs) => subs,
-        Err(e) => {
-            record("d3d12_xs", "CreatePipelineState", &format!("{e} -> E_INVALIDARG"));
-            return E_INVALIDARG;
-        }
-    };
-    let root = pipeline_root(stream, &subs) as *mut c_void;
+    let rule = parse(stream).and_then(|s| as_root_rule(stream, &s, &|rs| crate::console_slots_mesh::root_flags(rs as usize)));
+    if let Err(e) = rule {
+        record("d3d12_xs", "CreatePipelineState", &format!("{e} -> E_INVALIDARG"));
+        return E_INVALIDARG;
+    }
+    let root = parse(stream).ok().and_then(|s| s.iter().find(|(t, _)| *t == 0).map(|&(_, o)| bytecode(stream, o).0)).unwrap_or(0);
     let xlat = |ty: u32, b: &[u8], (n, f): (u32, [u32; 8])| {
-        if ty == SUB_MS && !root.is_null() && crate::shader_xlat::needs_external_root_data(b) {
-            if let Some(data) = crate::console_slots_mesh::root_data(root) {
+        if ty == SUB_MS && root != 0 && crate::shader_xlat::needs_external_root_data(b) {
+            if let Some(data) = crate::console_slots_mesh::root_data(root as *mut c_void) {
                 return crate::shader_xlat::translate_mesh_with_root(b, &data).map_err(|e| e.to_string());
             }
         }
-        crate::shader_xlat::translate_for_targets(b.as_ptr(), b.len(), stage_rtfmt(ty, (n, f))).map_err(|e| e.to_string())
+        let k = stage_rtfmt(ty, (n, f));
+        let k = if ty == SUB_PS { crate::centroid_bind::tag_rtfmt(root, k) } else { k };
+        crate::shader_xlat::translate_for_targets(b.as_ptr(), b.len(), k).map_err(|e| e.to_string())
     };
-    let (out, keep) = match translate_subobjects(stream, &subs, &xlat) {
+    let (out, keep) = match translate_stream(stream, &xlat) {
         Ok(v) => v,
         Err(e) => {
             record("d3d12_xs", "CreatePipelineState", &format!("stream rejected: {e} -> E_INVALIDARG"));
@@ -189,8 +177,11 @@ pub unsafe fn create_pipeline_state(real: *mut c_void, desc: *const [u64; 2], ri
     let f: unsafe extern "system" fn(*mut c_void, *const [u64; 2], *const c_void, *mut *mut c_void) -> i32 = core::mem::transmute(*vt2.add(PC_DEVICE2_CREATE_PIPELINE_STATE));
     let d = [out.len() as u64, out.as_ptr() as u64];
     let hr = f(dev2, &d, riid, ppv);
-    if hr >= 0 && !(*ppv).is_null() && subs.iter().any(|(t, o)| *t == SUB_AS && bytecode(stream, *o).0 != 0) {
+    if hr >= 0 && !(*ppv).is_null() && parse(stream).is_ok_and(|s| s.iter().any(|(t, o)| *t == SUB_AS && bytecode(stream, *o).0 != 0)) {
         crate::console_slots_mesh::note_as_pso(*ppv as usize);
+    }
+    if hr >= 0 && !(*ppv).is_null() {
+        crate::dbcount::note_stream_pso(*ppv as usize, &out, &keep);
     }
     let rel: unsafe extern "system" fn(*mut c_void) -> u32 = core::mem::transmute(*vt2.add(2));
     rel(dev2);
@@ -246,6 +237,19 @@ mod tests {
         let mut v = (b.as_ptr() as u64).to_le_bytes().to_vec();
         v.extend_from_slice(&(b.len() as u64).to_le_bytes());
         v
+    }
+
+    #[test]
+    fn depth_stencil1_is_56_bytes_with_bounds_last() {
+        let mut s = Vec::new();
+        let mut ds1 = vec![0u8; 56];
+        ds1[52] = 1;
+        push(&mut s, 21, &ds1);
+        push(&mut s, 17, &[4, 0, 0, 0, 0, 0, 0, 0]);
+        let subs = parse(&s).unwrap();
+        assert_eq!(subs, vec![(21, 4), (17, 68)]);
+        assert_eq!(s[4 + 52], 1);
+        assert_eq!(inner_layout(11), Some((4, 52)));
     }
 
     #[test]

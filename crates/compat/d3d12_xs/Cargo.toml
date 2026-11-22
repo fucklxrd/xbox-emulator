@@ -12,6 +12,7 @@ path = "src/lib.rs"
 
 [dependencies]
 compat-common = { path = "../compat-common" }
+xgs-kmd-emu = { path = "../xgs-kmd-emu" }
 tombox-xshader = { path = "../../tombox-xshader" }
 
 [target.'cfg(windows)'.build-dependencies]

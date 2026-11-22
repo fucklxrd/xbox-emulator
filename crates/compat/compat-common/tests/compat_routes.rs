@@ -51,9 +51,16 @@ fn direct_imports_resolve_by_name_and_by_console_ordinal() {
 }
 
 #[test]
+fn kernelbase_family_xref_rows_route_to_the_compat_kernelbase() {
+    for f in ["AddPackageToFamilyXref", "RemovePackageFromFamilyXref"] {
+        let r = lookup("kernelbase.dll", f, 19041).unwrap_or_else(|| panic!("{f} not routed"));
+        assert_eq!((r.lib, r.status), ("kernelbase", "implemented"), "{f}");
+    }
+}
+
+#[test]
 fn rows_not_implemented_fall_back_to_the_pc() {
     assert!(lookup("ntdll.dll", "RtlpUmsThreadYield", 19041).is_none());
-    assert!(lookup("kernelbase.dll", "AddPackageToFamilyXref", 19041).is_none());
     assert!(lookup("shcore.dll", "GetScaleFactorForDevice", 19041).is_none());
     assert!(lookup("user32.dll", "MessageBoxW", 19041).is_none());
     assert!(lookup("api-ms-win-core-com-l1-1-0.dll", "CoCreateInstance", 19041).is_none());

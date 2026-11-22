@@ -1,5 +1,10 @@
-#![cfg(tombox_backend_data)]
+#[cfg(not(tombox_backend_data))]
+#[test]
+#[ignore = "needs crates/compat/compat-common/backend_data"]
+fn online_matchmaking_flow_needs_backend_data() {}
 
+#[cfg(tombox_backend_data)]
+mod backend {
 use serde_json::{json, Value};
 use std::io::{BufRead, BufReader, Read, Write};
 use std::net::TcpStream;
@@ -363,4 +368,5 @@ fn run42_play_ticket_to_local_match() {
     let sentinel = fm::parse_endpoint(GAMESERVER).unwrap();
     let local = fm::rewrite_text(&travel, &sentinel, fm::DEFAULT_MAP, fm::DEFAULT_GAMEMODE, &fm::playlist()).unwrap();
     assert_eq!(local, "/Game/Athena/Apollo/Maps/Apollo_Terrain?game=/Game/Athena/Athena_GameMode.Athena_GameMode_C?Playlist=playlist_defaultsquad");
+}
 }

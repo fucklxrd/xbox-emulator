@@ -1,6 +1,12 @@
 use super::*;
 
 pub(crate) static LOCK: Mutex<()> = Mutex::new(());
+static INITIALIZED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+pub(crate) unsafe fn init_hix(log: usize) -> bool {
+    assert_eq!(InitializeHix(log), 0);
+    !INITIALIZED.swap(true, Ordering::SeqCst)
+}
 
 #[test]
 fn save_developer_blob_info_fails_without_kmd_region_and_fills_64_slots() {

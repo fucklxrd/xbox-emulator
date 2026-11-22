@@ -70,3 +70,21 @@ fn forwarded_calls_behave_as_pc() {
         assert!(buf.iter().any(|&b| b != 0));
     }
 }
+
+#[test]
+fn lsa_password_less_exports_write_the_emulated_device_value() {
+    let root = std::env::temp_dir().join(format!("tombox-a32l-pwdless-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&root);
+    std::env::set_var("TOMBOX_GDK_ROOT", &root);
+    let value = root.join("hklm").join("SOFTWARE").join("Microsoft").join("Windows NT").join("CurrentVersion").join("PasswordLess").join("Device").join("DevicePasswordLessBuildVersion.dword");
+    let h = dll();
+    unsafe {
+        let enable: unsafe extern "system" fn() -> i32 = core::mem::transmute(proc(h, "LsaEnablePasswordLessCurrentUser"));
+        let disable: unsafe extern "system" fn() -> i32 = core::mem::transmute(proc(h, "LsaDisablePasswordLessCurrentUser"));
+        assert_eq!(enable(), 0);
+        assert_eq!(std::fs::read_to_string(&value).unwrap().trim(), "2");
+        assert_eq!(disable(), 0);
+        assert_eq!(std::fs::read_to_string(&value).unwrap().trim(), "0");
+    }
+    let _ = std::fs::remove_dir_all(&root);
+}

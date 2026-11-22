@@ -1,5 +1,10 @@
-#![cfg(tombox_backend_data)]
+#[cfg(not(tombox_backend_data))]
+#[test]
+#[ignore = "needs crates/compat/compat-common/backend_data"]
+fn lan_two_process_needs_backend_data() {}
 
+#[cfg(tombox_backend_data)]
+mod backend {
 use compat_common::online::lan::{self, Role};
 use serde_json::{json, Value};
 use std::net::UdpSocket;
@@ -53,7 +58,7 @@ fn two_process_lan_hub() {
     let exe = std::env::current_exe().unwrap();
     let run = |extra: &[(&str, String)]| {
         let mut c = Command::new(&exe);
-        c.args(["--exact", "two_process_lan_hub", "--nocapture", "--test-threads=1"]).env("TOMBOX_LAN_CHILD", "1").env("TOMBOX_LAN", "join").env("TOMBOX_LAN_DISCOVERY_PORT", dp.to_string()).env_remove("TOMBOX_LAN_PORT").env_remove("TOMBOX_LAN_HOST");
+        c.args(["--exact", "backend::two_process_lan_hub", "--nocapture", "--test-threads=1"]).env("TOMBOX_LAN_CHILD", "1").env("TOMBOX_LAN", "join").env("TOMBOX_LAN_DISCOVERY_PORT", dp.to_string()).env_remove("TOMBOX_LAN_PORT").env_remove("TOMBOX_LAN_HOST");
         for (k, v) in extra {
             c.env(k, v);
         }
@@ -72,4 +77,5 @@ fn two_process_lan_hub() {
     let out = run(&[("CHILD_DISCOVERY_ONLY", "1".into())]);
     let text = String::from_utf8_lossy(&out.stdout).to_string() + &String::from_utf8_lossy(&out.stderr);
     assert!(out.status.success() && text.contains("CHILD-DISCOVERED"), "discovery child failed:\n{text}");
+}
 }

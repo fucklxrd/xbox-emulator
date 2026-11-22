@@ -17,11 +17,13 @@ fn wide(s: &str) -> Vec<u16> {
 
 fn load_gcxaudioext() {
     let exe = std::env::current_exe().unwrap();
+    let in_build_dir = |build: std::path::PathBuf| {
+        std::fs::read_dir(build.join("gcxaudioext")).ok()?.flatten().map(|e| e.path().join("out").join("gcxaudioext.dll")).filter(|p| p.is_file()).max_by_key(|p| std::fs::metadata(p).and_then(|m| m.modified()).ok())
+    };
     let dll = exe
         .ancestors()
-        .flat_map(|d| [d.join("gcxaudioext.dll"), d.join("debug").join("gcxaudioext.dll")])
-        .find(|p| p.is_file())
-        .unwrap_or_else(|| panic!("build gcxaudioext into the same target dir (none above {})", exe.display()));
+        .find_map(|d| [d.join("gcxaudioext.dll"), d.join("deps").join("gcxaudioext.dll"), d.join("debug").join("gcxaudioext.dll")].into_iter().find(|p| p.is_file()).or_else(|| in_build_dir(d.join("build"))))
+        .unwrap_or_else(|| panic!("gcxaudioext.dll (an XAudio2_9 dev-dependency) is not in the target dir above {}", exe.display()));
     assert!(!unsafe { LoadLibraryW(wide(dll.to_str().unwrap()).as_ptr()) }.is_null());
 }
 

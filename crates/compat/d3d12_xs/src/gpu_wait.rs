@@ -395,6 +395,11 @@ fn cpu_address(addr: u64) -> Option<usize> {
 fn read_title(ptr: usize, wide: bool) -> Option<u64> {
     let mut v = 0u64;
     let n = if wide { 8 } else { 4 };
+    if let Some(b) = crate::title_shadow::read(ptr as u64, n) {
+        let mut w = [0u8; 8];
+        w[..n].copy_from_slice(&b);
+        return Some(u64::from_le_bytes(w));
+    }
     let ok = unsafe { ReadProcessMemory(GetCurrentProcess(), ptr as *const c_void, &mut v as *mut u64 as *mut c_void, n, core::ptr::null_mut()) };
     (ok != 0).then_some(v)
 }
@@ -581,8 +586,6 @@ unsafe fn run_steps(queue: *mut c_void, steps: &[Step], lists: &[*mut c_void], e
 mod tests {
     use super::*;
 
-    static COND_POOL_TEST: Mutex<()> = Mutex::new(());
-
     #[test]
     fn comparison_functions_map_like_the_debug_umd() {
         assert_eq!(wait_reg_mem_function(FUNC_LESS), 1);
@@ -662,6 +665,8 @@ mod tests {
         let s = plan(&mut b, &[&[Op::Wait { addr: 0x400, func: FUNC_ALWAYS, value: 1, mask: 0 }][..]]);
         assert_eq!(s, vec![Step::Exec { index: 0 }]);
     }
+
+    static COND_POOL_TEST: Mutex<()> = Mutex::new(());
 
     #[test]
     fn condition_fences_are_pooled_with_rising_values() {

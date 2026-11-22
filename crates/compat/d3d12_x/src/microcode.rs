@@ -56,10 +56,14 @@ mod tests {
     }
 
     #[test]
-    fn valid_upload_fails_without_kernel_driver() {
+    fn valid_upload_fails_on_the_emulated_kmd() {
+        let _g = kmd::test_serial();
         let code = [0u32; 16];
         let p = code.as_ptr() as usize;
         assert_eq!(unsafe { D3DUploadCustomMicrocode(1, p, 64, p, 1, 1, p) }, E_FAIL);
+        let h = kmd::cached();
+        assert!(xgs_kmd_emu::is_device(h));
+        assert_eq!(unsafe { kmd::release(h) }, 0);
         assert_eq!(kmd::cached(), kmd::INVALID);
     }
 }

@@ -5,7 +5,7 @@ use common_process_debug::*;
 fn debug_flag_selects_debug_driver_and_requests_pc_debug_layer() {
     let d = load("on");
     assert_eq!(d.set(0xffff_ffff), 0);
-    assert_eq!(d.get(), 0x81f0_0001);
+    assert_eq!(d.get(), 0x83f0_0001);
     assert_eq!(d.set(0x0000_0001), 0);
     assert_eq!(d.get(), 1);
     let (hr, dev) = d.create(0x0000_0001);

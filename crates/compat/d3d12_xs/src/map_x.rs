@@ -340,6 +340,15 @@ unsafe fn opt_range(r: *const (u64, u64)) -> Option<(u64, u64)> {
 }
 
 unsafe extern "system" fn map_hook(res: *mut c_void, sub: u32, range: *const (u64, u64), out: *mut *mut c_void) -> i32 {
+    if let Some(va) = crate::title_shadow::map_va(res) {
+        if sub != 0 {
+            return E_INVALIDARG;
+        }
+        if !out.is_null() {
+            unsafe { *out = va as *mut c_void };
+        }
+        return 0;
+    }
     let o = orig(res, false);
     if o == 0 {
         return E_INVALIDARG;
@@ -393,6 +402,9 @@ unsafe extern "system" fn map_hook(res: *mut c_void, sub: u32, range: *const (u6
 }
 
 unsafe extern "system" fn unmap_hook(res: *mut c_void, sub: u32, written: *const (u64, u64)) {
+    if crate::title_shadow::map_va(res).is_some() {
+        return;
+    }
     if sub == 0 && unsafe { console_unmap(res, opt_range(written)) } {
         return;
     }

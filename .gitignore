@@ -24,3 +24,7 @@ secrets/
 games/
 emulator/
 
+*.fdmdownload
+*.xvc.*
+*.part
+*.crdownload

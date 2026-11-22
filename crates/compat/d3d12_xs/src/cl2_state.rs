@@ -195,6 +195,7 @@ pub struct Targets {
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct ListState {
     pub open: bool,
+    pub closed: bool,
     pub queue: usize,
     pub kickoff_pending: bool,
     pub list9: Option<bool>,
@@ -206,6 +207,7 @@ pub struct ListState {
     pub pso: Option<usize>,
     pub variant_bound: bool,
     pub predication: Option<(usize, u64, u32)>,
+    pub plain_predicate: bool,
     pub heaps: Option<Vec<usize>>,
     pub root: [Option<usize>; 2],
     pub args: BTreeMap<(u8, u32), RootArg>,
@@ -363,12 +365,21 @@ fn with<R>(list: *mut c_void, f: impl FnOnce(&mut ListState) -> R) -> R {
 
 pub fn on_new_list(list: *mut c_void) {
     if !list.is_null() {
+        crate::cl_fw::forget(crate::list_split::origin_of(list));
         with(list, |s| *s = ListState { open: true, ..ListState::default() });
     }
 }
 
 pub(crate) fn bound_pso(list: *mut c_void) -> Option<usize> {
     with(list, |s| s.pso)
+}
+
+pub(crate) fn predication_of(list: *mut c_void) -> Option<(usize, u64, u32)> {
+    with(list, |s| s.predication).filter(|p| p.0 != 0)
+}
+
+pub(crate) fn note_predication(list: *mut c_void, res: usize, off: u64, op: u32) {
+    rec(list, |s| s.predication = Some((res, off, op)));
 }
 
 pub(crate) fn queue_of(list: *mut c_void) -> usize {
@@ -379,13 +390,18 @@ pub(crate) fn is_open(list: *mut c_void) -> bool {
     with(list, |s| s.open)
 }
 
+pub(crate) fn title_closed(list: *mut c_void) -> bool {
+    let g = STATES[shard_of(list as usize)].lock().unwrap_or_else(|e| e.into_inner());
+    g.as_ref().and_then(|m| m.get(&(list as usize))).is_some_and(|s| s.closed)
+}
+
 pub(crate) fn mark_closed(list: *mut c_void) {
     with(list, |s| s.open = false);
 }
 
 pub(crate) fn clone_state(from: *mut c_void, to: *mut c_void) {
     let s = with(from, |s| s.clone());
-    with(to, |t| *t = ListState { open: true, queue: 0, kickoff_pending: false, ..s });
+    with(to, |t| *t = ListState { open: true, closed: false, queue: 0, kickoff_pending: false, ..s });
     if from != to {
         crate::query_x::carry_nest(from as usize, to as usize);
     }
@@ -444,7 +460,22 @@ unsafe extern "system" fn w_stencil(this: *mut c_void, r: u32) {
     fwd!(X_STENCIL_REF, fn(u32), this, r)
 }
 
+pub(crate) fn plain_null_is_noop(plain_active: bool, res: usize) -> bool {
+    res == 0 && !plain_active
+}
+
 unsafe extern "system" fn w_predication(this: *mut c_void, res: *mut c_void, off: u64, op: u32) {
+    if plain_null_is_noop(with(this, |s| s.plain_predicate), res as usize) {
+        if once(8) {
+            record("d3d12_xs", "cl2_state", &format!("SetPredication(NULL) on list {this:p} with no SetPredication resource active: the console UMD emits no packet (xgs12 0x56fd1 / xgs12_10 0x5e672 test flag bit 1), so the current predicate, including one from SetPredicationBufferX, stays in force"));
+        }
+        return;
+    }
+    rec(this, |s| s.plain_predicate = !res.is_null());
+    unsafe { reapply_predication(this, res, off, op) }
+}
+
+unsafe fn reapply_predication(this: *mut c_void, res: *mut c_void, off: u64, op: u32) {
     rec(this, |s| s.predication = Some((res as usize, off, op)));
     fwd!(X_PREDICATION, fn(*mut c_void, u64, u32), this, res, off, op)
 }
@@ -1146,6 +1177,97 @@ unsafe fn resume_queries(list: *mut c_void) {
     }
 }
 
+pub(crate) unsafe fn pause_queries(list: *mut c_void, occlusion_only: bool) -> Vec<(usize, u32, u32)> {
+    let qs: Vec<ActiveQuery> = with(list, |s| if s.suspended { Vec::new() } else { s.queries.iter().filter(|q| !occlusion_only || q.ty <= 1).cloned().collect() });
+    if qs.is_empty() {
+        return Vec::new();
+    }
+    for q in &qs {
+        fwd!(X_END_QUERY, fn(*mut c_void, u32, u32), list, q.heap as *mut c_void, q.ty, q.index);
+    }
+    let key = crate::list_split::origin_of(list);
+    let pred = predication_of(list);
+    unsafe { pc_no_predication(list) };
+    for q in &qs {
+        match unsafe { new_slot(list, key) } {
+            Some((slot, res, _, off)) => {
+                unsafe {
+                    crate::fill::barrier_pub(list, res, ST_COMMON, ST_COPY_DEST);
+                    pc_resolve(list, q.heap, q.ty, q.index, res, off);
+                    crate::fill::barrier_pub(list, res, ST_COPY_DEST, ST_COMMON);
+                }
+                with(list, |s| {
+                    if let Some(a) = s.queries.iter_mut().find(|a| a.heap == q.heap && a.index == q.index) {
+                        a.parts.push(slot);
+                    }
+                });
+            }
+            None => {
+                if once(16) {
+                    record("d3d12_xs", "cl2_state", &format!("query {}#{} paused: no partial-result slot, the part before the pause is lost", q.heap, q.index));
+                }
+            }
+        }
+    }
+    if let Some((r, o, op)) = pred {
+        let f: unsafe extern "system" fn(*mut c_void, *mut c_void, u64, u32) = unsafe { core::mem::transmute(vslot(list, PC_SET_PREDICATION)) };
+        unsafe { f(list, r as *mut c_void, o, op) };
+    }
+    qs.iter().map(|q| (q.heap, q.ty, q.index)).collect()
+}
+
+pub(crate) unsafe fn unpause_queries(list: *mut c_void, keys: &[(usize, u32, u32)]) {
+    for &(h, t, i) in keys {
+        fwd!(X_BEGIN_QUERY, fn(*mut c_void, u32, u32), list, h as *mut c_void, t, i);
+    }
+}
+
+pub(crate) fn real_device() -> *mut c_void {
+    REAL_DEVICE.load(Ordering::Relaxed) as *mut c_void
+}
+
+pub(crate) unsafe fn bound_variant_key(list: *mut c_void) -> Option<VariantKey> {
+    let (pso, bound, x) = with(list, |s| (s.pso.unwrap_or(0), s.variant_bound, s.depth_bias_x));
+    if !bound {
+        return None;
+    }
+    let pb = pso_bias(pso)?;
+    let dynamic = pb.dynamic && unsafe { dynamic_usable(list) };
+    Some(match x {
+        Some(x) if !dynamic => static_key(x),
+        Some(x) => VariantKey { clip: x.clip, dynamic: true, bias: None },
+        None => VariantKey { clip: pb.clip, dynamic: false, bias: None },
+    })
+}
+
+pub(crate) unsafe fn rebind_pso(list: *mut c_void) {
+    let (pso, x) = with(list, |s| (s.pso, s.depth_bias_x));
+    let Some(p) = pso else { return };
+    unsafe { pc_set_pso(list, p) };
+    with(list, |s| s.variant_bound = false);
+    unsafe { apply_pso_bias(list, p) };
+    if let Some(x) = x {
+        unsafe { apply_depth_bias_x(list, x) };
+    }
+}
+
+#[cfg(test)]
+pub(crate) static TEST_PREV_LOCK: Mutex<()> = Mutex::new(());
+
+#[cfg(test)]
+pub(crate) fn test_install(vt: &[AtomicUsize]) -> Vec<usize> {
+    let saved: Vec<usize> = PREV.iter().map(|p| p.swap(0, Ordering::Relaxed)).collect();
+    install(vt, &[]);
+    saved
+}
+
+#[cfg(test)]
+pub(crate) fn test_restore(saved: Vec<usize>) {
+    for (i, v) in saved.into_iter().enumerate() {
+        PREV[i].store(v, Ordering::Relaxed);
+    }
+}
+
 unsafe fn accumulate(list: *mut c_void, heap: usize, ty: u32, dst: *mut c_void, plan: &[(u32, u64, u32, u32, Vec<u32>)]) {
     let Some(p) = (unsafe { query_pipe(list) }) else { return };
     let key = crate::list_split::origin_of(list);
@@ -1239,7 +1361,26 @@ pub fn resolve_runs(start: u32, n: u32, skip: &[u32]) -> Vec<(u32, u32)> {
     out
 }
 
+pub(crate) unsafe fn signal_queue(queue: *mut c_void, list: *mut c_void) -> Option<(usize, u64)> {
+    let (fence, value) = unsafe { queue_fence(queue, list) }?;
+    let signal: unsafe extern "system" fn(*mut c_void, *mut c_void, u64) -> i32 = unsafe { core::mem::transmute(vslot(queue, QUEUE_SIGNAL)) };
+    unsafe { signal(queue, fence as *mut c_void, value) };
+    Some((fence, value))
+}
+
+pub(crate) unsafe fn fence_passed(fence: usize, value: u64) -> bool {
+    unsafe { fence_done(fence, value) }
+}
+
+pub(crate) unsafe fn reapply_so(list: *mut c_void) {
+    let so = with(list, |s| s.so.clone());
+    for (&slot, v) in &so {
+        unsafe { w_so(list, slot, 1, v.as_ref().map(|x| x.as_ptr()).unwrap_or(core::ptr::null())) };
+    }
+}
+
 pub unsafe fn note_executed(queue: *mut c_void, lists: &[*mut c_void]) {
+    unsafe { crate::dbcount::note_executed(queue, lists) };
     let Some(&first) = lists.first() else { return };
     let keys: Vec<usize> = lists.iter().map(|&l| crate::list_split::origin_of(l)).collect();
     if !store(|st| st.holds_any(&keys)) {
@@ -1262,6 +1403,7 @@ pub fn release_list_parts(list: *mut c_void) {
 }
 
 unsafe extern "system" fn w_exec_bundle(this: *mut c_void, bundle: *mut c_void) {
+    let bundle = crate::cmdlist_wrap::unwrap(bundle);
     fwd!(X_EXEC_BUNDLE, fn(*mut c_void), this, bundle);
     unsafe { after_bundle(this, bundle) };
 }
@@ -1317,6 +1459,71 @@ unsafe fn reapply_xstate(list: *mut c_void, x: &XState) {
     }
 }
 
+pub(crate) fn set_queue(list: *mut c_void, queue: usize) {
+    with(list, |s| s.queue = queue);
+}
+
+pub(crate) fn sets_inherited_state(bundle: *mut c_void) -> bool {
+    with(bundle, |s| s.heaps.is_some() || s.root.iter().any(Option::is_some) || !s.args.is_empty())
+}
+
+pub(crate) fn query_parts(list: *mut c_void) -> Vec<Vec<u32>> {
+    with(list, |s| s.queries.iter().map(|q| q.parts.clone()).collect())
+}
+
+pub(crate) unsafe fn close_part_into(list: *mut c_void, slots: &[Option<u32>]) -> i32 {
+    let qs = with(list, |s| if s.open { s.queries.clone() } else { Vec::new() });
+    if !qs.is_empty() {
+        for q in &qs {
+            fwd!(X_END_QUERY, fn(*mut c_void, u32, u32), list, q.heap as *mut c_void, q.ty, q.index);
+        }
+        unsafe { pc_no_predication(list) };
+        for (q, s) in qs.iter().zip(slots) {
+            if let Some((res, _, off)) = s.and_then(|s| store(|st| st.loc(s))) {
+                unsafe {
+                    crate::fill::barrier_pub(list, res, ST_COMMON, ST_COPY_DEST);
+                    pc_resolve(list, q.heap, q.ty, q.index, res, off);
+                    crate::fill::barrier_pub(list, res, ST_COPY_DEST, ST_COMMON);
+                }
+            }
+        }
+        with(list, |s| s.suspended = true);
+    }
+    let p = prev(X_CLOSE);
+    let p = if p != 0 { p } else { unsafe { vslot(list, PC_CLOSE) } };
+    let f: unsafe extern "system" fn(*mut c_void) -> i32 = unsafe { core::mem::transmute(p) };
+    let hr = unsafe { f(list) };
+    if hr >= 0 {
+        with(list, |s| s.open = false);
+    }
+    hr
+}
+
+pub(crate) unsafe fn reapply_bindings(list: *mut c_void) {
+    let s = with(list, |s| s.clone());
+    unsafe { apply_bindings(list, &s) };
+}
+
+unsafe fn apply_bindings(list: *mut c_void, s: &ListState) {
+    unsafe {
+        if let Some(h) = &s.heaps { w_heaps(list, h.len() as u32, h.as_ptr()); }
+        if let Some(r) = s.root[0] { w_croot(list, r as *mut c_void); }
+        if let Some(r) = s.root[1] { w_groot(list, r as *mut c_void); }
+        for (&(side, idx), a) in &s.args {
+            match a {
+                RootArg::Table(h) => if side == 0 { w_ctable(list, idx, *h) } else { w_gtable(list, idx, *h) },
+                RootArg::View(slot, va) => {
+                    let f: unsafe extern "system" fn(*mut c_void, u32, u64) = core::mem::transmute(view_wrapper(*slot));
+                    f(list, idx, *va)
+                }
+                RootArg::Consts(m) => for (&off, &v) in m {
+                    if side == 0 { w_c1(list, idx, v, off) } else { w_g1(list, idx, v, off) }
+                },
+            }
+        }
+    }
+}
+
 pub(crate) unsafe fn reapply(list: *mut c_void) {
     let s = with(list, |s| s.clone());
     unsafe {
@@ -1358,7 +1565,7 @@ pub(crate) unsafe fn reapply(list: *mut c_void) {
         if let Some((sp, px, v)) = &s.sample_positions { w_sample_positions(list, *sp, *px, if v.is_empty() { core::ptr::null() } else { v.as_ptr() }); }
         if let Some((r, c)) = s.shading_rate { w_shading_rate(list, r, c.as_ref().map(|x| x.as_ptr()).unwrap_or(core::ptr::null())); }
         if let Some(i) = s.shading_rate_image { w_shading_rate_image(list, i as *mut c_void); }
-        if let Some(p) = s.predication { w_predication(list, p.0 as *mut c_void, p.1, p.2); }
+        if let Some(p) = s.predication { reapply_predication(list, p.0 as *mut c_void, p.1, p.2); }
         if let Some(x) = s.depth_bias_x {
             with(list, |st| st.depth_bias_x = Some(x));
             apply_depth_bias_x(list, x);
@@ -1477,11 +1684,13 @@ pub(crate) unsafe fn submit_part(list: *mut c_void, queue: *mut c_void) {
     let exec: crate::gpu_wait::ExecFn = unsafe { core::mem::transmute(vslot(queue, QUEUE_EXECUTE)) };
     let l = [list];
     unsafe { crate::title_heap::sync_for_execute(&l) };
+    crate::title_shadow::before_execute();
     if crate::gpu_wait::has_queue_fns() {
         unsafe { crate::gpu_wait::submit(queue, &l, exec, crate::gpu_wait::signal_fn(), crate::gpu_wait::wait_fn()) };
     } else {
         unsafe { exec(queue, 1, l.as_ptr()) };
     }
+    unsafe { crate::title_shadow::after_execute(queue, crate::gpu_wait::signal_fn(), crate::gpu_wait::wait_fn()) };
     unsafe { crate::list_split::after_submit(queue, &l) };
     unsafe { note_executed(queue, &l) };
     unsafe { retire_allocators(list, queue) };
@@ -1591,6 +1800,7 @@ unsafe extern "system" fn w_close(this: *mut c_void) -> i32 {
     let hr = unsafe { f(this) };
     with(this, |s| {
         s.open = false;
+        s.closed = hr >= 0;
         s.queue = 0;
         s.kickoff_pending = false;
     });
@@ -1608,6 +1818,7 @@ unsafe extern "system" fn w_reset(this: *mut c_void, alloc: *mut c_void, pso: *m
     clear_presubmitted(&[this]);
     release_list_parts(this);
     if hr >= 0 {
+        crate::cl_fw::forget(crate::list_split::origin_of(this));
         with(this, |s| {
             *s = ListState { open: true, list9: s.list9, pso: (!pso.is_null()).then_some(pso as usize), ..ListState::default() };
         });
@@ -1961,7 +2172,7 @@ mod tests {
         assert!(chunk_fits(120, 8, 128) && !chunk_fits(121, 8, 128) && !chunk_fits(u32::MAX, 8, 128));
     }
 
-    static PREV_LOCK: Mutex<()> = Mutex::new(());
+    use super::TEST_PREV_LOCK as PREV_LOCK;
 
     macro_rules! vc {
         ($obj:expr, $slot:expr, fn($($at:ty),*) -> $rt:ty $(, $arg:expr)*) => {{

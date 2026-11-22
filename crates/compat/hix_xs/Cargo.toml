@@ -13,3 +13,6 @@ path = "src/lib.rs"
 [dependencies]
 console-image = { path = "../console-image" }
 compat-common = { path = "../compat-common" }
+
+[dev-dependencies]
+xone-exports = { path = "../xone-exports" }

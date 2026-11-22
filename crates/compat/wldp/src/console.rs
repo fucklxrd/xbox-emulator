@@ -226,3 +226,41 @@ pub unsafe extern "system" fn WldpResetSecurityWatermarkState() -> HResult {
 pub unsafe extern "system" fn WldpTraceLoggingWDACBlockDialogShown(path: *const u16, hresult: u32, guid: *const Guid, actions: *const u16) {
     wdac_block_dialog_shown(path, hresult, guid, actions);
 }
+
+pub const CO_E_NOTINITIALIZED: HResult = 0x8004_01F0u32 as i32;
+pub const REGDB_E_CLASSNOTREG: HResult = 0x8004_0154u32 as i32;
+pub const XML_DOCUMENT_CLASS: &str = "Windows.Data.Xml.Dom.XmlDocument";
+
+#[link(name = "ole32")]
+extern "system" {
+    fn CoGetApartmentType(apt: *mut i32, qualifier: *mut i32) -> HResult;
+}
+
+pub fn console_apartment_status() -> HResult {
+    let (mut a, mut q) = (0i32, 0i32);
+    let hr = unsafe { CoGetApartmentType(&mut a, &mut q) };
+    if hr == CO_E_NOTINITIALIZED {
+        CO_E_NOTINITIALIZED
+    } else {
+        0
+    }
+}
+
+pub fn console_activate_xml_document(apartment: HResult) -> HResult {
+    if apartment < 0 {
+        apartment
+    } else {
+        REGDB_E_CLASSNOTREG
+    }
+}
+
+pub fn send_smart_app_control_block_toast_in(apartment: HResult) -> HResult {
+    let hr = console_activate_xml_document(apartment);
+    store::log("WldpSendSmartAppControlBlockToast", &format!("RoActivateInstance({XML_DOCUMENT_CLASS}) -> {hr:#x} (toasthelper.cpp line 0x195/0x1c5)"));
+    hr
+}
+
+#[no_mangle]
+pub unsafe extern "system" fn WldpSendSmartAppControlBlockToast(_file: *const u16, _arg2: *const c_void) -> HResult {
+    send_smart_app_control_block_toast_in(console_apartment_status())
+}

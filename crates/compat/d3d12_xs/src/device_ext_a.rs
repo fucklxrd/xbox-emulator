@@ -159,11 +159,70 @@ const NULL_UAV: [u8; 0x28] = {
 
 static VIEW_LOG: AtomicUsize = AtomicUsize::new(0);
 
-unsafe fn resource_format(res: *mut c_void) -> u32 {
+unsafe fn resource_desc(res: *mut c_void) -> [u8; 0x38] {
     let mut d = [0u8; 0x38];
     let f: unsafe extern "system" fn(*mut c_void, *mut u8) -> *mut u8 = unsafe { core::mem::transmute(vfn(res, RES_GET_DESC)) };
     unsafe { f(res, d.as_mut_ptr()) };
-    rd32(&d, 0x20)
+    d
+}
+
+pub fn typed_view_format(f: u32) -> u32 {
+    match f {
+        1 => 2,
+        5 => 6,
+        9 => 10,
+        15 => 16,
+        19 => 21,
+        23 => 24,
+        27 => 28,
+        33 => 34,
+        39 => 41,
+        44 => 46,
+        48 => 49,
+        53 => 56,
+        60 => 61,
+        70 => 71,
+        73 => 74,
+        76 => 77,
+        79 => 80,
+        82 => 83,
+        90 => 87,
+        92 => 88,
+        94 => 95,
+        97 => 98,
+        f => f,
+    }
+}
+
+pub fn fit_texture_view(pc: &mut [u8], res: &[u8; 0x38], uav: bool) -> bool {
+    let (rdim, rfmt, samples) = (rd32(res, 0), rd32(res, 0x20), rd32(res, 0x24));
+    if rdim < 2 {
+        return false;
+    }
+    let mut changed = false;
+    if rd32(pc, 0) == 0 {
+        wr32(pc, 0, typed_view_format(rfmt));
+        changed = true;
+    }
+    if !uav && samples > 1 {
+        match rd32(pc, 4) {
+            4 => {
+                wr32(pc, 4, 6);
+                pc[0x10..0x28].fill(0);
+                changed = true;
+            }
+            5 => {
+                let (first, size) = (rd32(pc, 0x18), rd32(pc, 0x1c));
+                wr32(pc, 4, 7);
+                pc[0x10..0x28].fill(0);
+                wr32(pc, 0x10, first);
+                wr32(pc, 0x14, size);
+                changed = true;
+            }
+            _ => {}
+        }
+    }
+    changed
 }
 
 #[derive(Debug, PartialEq)]
@@ -183,8 +242,13 @@ pub unsafe fn plan_placed_view(res: *mut c_void, pdesc: *const u8, uav: bool, lo
     let size = if uav { 0x40 } else { 0x48 };
     let x = unsafe { core::slice::from_raw_parts(pdesc, size) }.to_vec();
     let mut pc = x[..0x28].to_vec();
-    let fmt = promote_depth_view_format(rd32(&pc, 0), unsafe { resource_format(res) }, driver_option(17).unwrap_or(0) != 0);
+    let rdesc = unsafe { resource_desc(res) };
+    let fmt = promote_depth_view_format(rd32(&pc, 0), rd32(&rdesc, 0x20), driver_option(17).unwrap_or(0) != 0);
     wr32(&mut pc, 0, fmt);
+    static FIT_LOG: AtomicUsize = AtomicUsize::new(0);
+    if fit_texture_view(&mut pc, &rdesc, uav) && once(&FIT_LOG, 16) {
+        record("d3d12_xs", "PlacedViewX", &format!("texture view (resource fmt={} samples={}) given view fmt={} dim={}: PC texture views need a typed format and an MSAA dimension for multisampled resources, so they are taken from the resource",rd32(&rdesc, 0x20), rd32(&rdesc, 0x24), rd32(&pc, 0), rd32(&pc, 4)));
+    }
     let extras: Vec<(usize, u32)> = if uav {
         vec![(0x38, rd32(&x, 0x38))]
     } else {

@@ -110,6 +110,51 @@ console_notimpl!(
     mux_WaitMessage
 );
 
+#[link(name = "user32")]
+extern "system" {
+    fn IsWindowUnicode(h: *mut c_void) -> i32;
+    fn GetWindowLongPtrA(h: *mut c_void, i: i32) -> isize;
+    fn GetWindowLongPtrW(h: *mut c_void, i: i32) -> isize;
+    fn SetWindowLongPtrA(h: *mut c_void, i: i32, v: isize) -> isize;
+    fn SetWindowLongPtrW(h: *mut c_void, i: i32, v: isize) -> isize;
+}
+
+unsafe fn window_long_get(h: *mut c_void, i: i32) -> isize {
+    if IsWindowUnicode(h) != 0 {
+        GetWindowLongPtrW(h, i)
+    } else {
+        GetWindowLongPtrA(h, i)
+    }
+}
+
+unsafe fn window_long_set(h: *mut c_void, i: i32, v: isize) -> isize {
+    if IsWindowUnicode(h) != 0 {
+        SetWindowLongPtrW(h, i, v)
+    } else {
+        SetWindowLongPtrA(h, i, v)
+    }
+}
+
+#[no_mangle]
+pub unsafe extern "system" fn mux_GetWindowLongPtrA(h: *mut c_void, i: i32) -> isize {
+    window_long_get(h, i)
+}
+
+#[no_mangle]
+pub unsafe extern "system" fn mux_GetWindowLongPtrW(h: *mut c_void, i: i32) -> isize {
+    window_long_get(h, i)
+}
+
+#[no_mangle]
+pub unsafe extern "system" fn mux_SetWindowLongPtrA(h: *mut c_void, i: i32, v: isize) -> isize {
+    window_long_set(h, i, v)
+}
+
+#[no_mangle]
+pub unsafe extern "system" fn mux_SetWindowLongPtrW(h: *mut c_void, i: i32, v: isize) -> isize {
+    window_long_set(h, i, v)
+}
+
 fn result_bool(r: Result<bool, u32>) -> i32 {
     match r {
         Ok(b) => {

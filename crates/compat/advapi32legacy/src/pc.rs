@@ -14,6 +14,8 @@ extern "system" {
     fn LoadLibraryExW(name: *const u16, file: *mut c_void, flags: u32) -> *mut c_void;
     fn GetProcAddress(m: *mut c_void, name: *const u8) -> *mut c_void;
     fn GetSystemDirectoryW(buf: *mut u16, n: u32) -> u32;
+    fn GetLastError() -> u32;
+    fn SetLastError(code: u32);
 }
 
 pub type RegisterEventSourceWFn = unsafe extern "system" fn(*const u16, *const u16) -> Handle;
@@ -61,17 +63,24 @@ unsafe fn proc<T>(m: *mut c_void, name: &[u8]) -> Option<T> {
 pub fn pc() -> &'static Pc {
     static PC: OnceLock<Pc> = OnceLock::new();
     PC.get_or_init(|| unsafe {
-        let m = module();
-        if m.is_null() {
-            return Pc { module: 0, register: None, deregister: None, report: None };
-        }
-        Pc {
-            module: m as usize,
-            register: proc(m, b"RegisterEventSourceW\0"),
-            deregister: proc(m, b"DeregisterEventSource\0"),
-            report: proc(m, b"ReportEventW\0"),
-        }
+        let saved = GetLastError();
+        let pc = bind();
+        SetLastError(saved);
+        pc
     })
+}
+
+unsafe fn bind() -> Pc {
+    let m = module();
+    if m.is_null() {
+        return Pc { module: 0, register: None, deregister: None, report: None };
+    }
+    Pc {
+        module: m as usize,
+        register: proc(m, b"RegisterEventSourceW\0"),
+        deregister: proc(m, b"DeregisterEventSource\0"),
+        report: proc(m, b"ReportEventW\0"),
+    }
 }
 
 pub fn missing_status() -> NtStatus {

@@ -16,9 +16,9 @@
 16 XCrdMoveSidecarFiles implemented | xcrd: XVD miniport request 0x78001b0, console validation/payload layout
 17 XCrdReadUserDataXVD implemented | xcrd: XVD user-data read 0x78000028 in 1 MB chunks
 18 XCrdReadBatInfoXVD implemented | xcrd: XVD miniport request 0x780002c, console validation/payload layout
-19 XCrdQueryEncryptedInfo implemented | xcrd: console body returns 0x80070032, matched
-20 XCrdQueryUnlockInfo implemented | xcrd: console body returns 0x80070032, matched
-21 XCrdRepairFiles implemented | xcrd: console body returns 0x80070032, matched
+19 XCrdQueryEncryptedInfo stub | fixed failure, no work done: xcrd: console body returns 0x80070032, matched
+20 XCrdQueryUnlockInfo stub | fixed failure, no work done: xcrd: console body returns 0x80070032, matched
+21 XCrdRepairFiles stub | fixed failure, no work done: xcrd: console body returns 0x80070032, matched
 22 XCrdGrowThinProvisionedXvd implemented | xcrd: XVD miniport request 0x7800170, console validation/payload layout
 23 XCrdResetStreamedState implemented | xcrd: XVD miniport request 0x780004c, console validation/payload layout
 24 XCrdOddPmAcquireReleaseReference implemented | xcrd: XVD miniport request 0x7800098, console validation/payload layout
@@ -93,10 +93,10 @@
 93 XCrdStorageSetDeviceName implemented | xcrd2: XVD storage 0x78000088 / blob 0x78000090-94 / 0x780000c4
 94 XCrdStorageSetLastUsedConsole implemented | xcrd2: XVD storage 0x78000088 / blob 0x78000090-94 / 0x780000c4
 95 XCrdSetTraceFlags implemented | xcrd2: trace mask &7 else STATUS_INVALID_PARAMETER
-96 XCrdShuffle implemented | xcrd2: returns E_NOTIMPL 0x80004001 exactly as console DLL
-97 XCrdWaitForAllRemovableDiskRemoval implemented | xcrd2: returns E_NOTIMPL 0x80004001 exactly as console DLL
-98 XCrdWaitForAnyRemovableDiskArrival implemented | xcrd2: returns E_NOTIMPL 0x80004001 exactly as console DLL
-99 XCrdTrimDeallocatedClusters implemented | xcrd2: returns 0x80070032 exactly as console DLL
+96 XCrdShuffle stub | fixed failure, no work done: xcrd2: returns E_NOTIMPL 0x80004001 exactly as console DLL
+97 XCrdWaitForAllRemovableDiskRemoval stub | fixed failure, no work done: xcrd2: returns E_NOTIMPL 0x80004001 exactly as console DLL
+98 XCrdWaitForAnyRemovableDiskArrival stub | fixed failure, no work done: xcrd2: returns E_NOTIMPL 0x80004001 exactly as console DLL
+99 XCrdTrimDeallocatedClusters stub | fixed failure, no work done: xcrd2: returns 0x80070032 exactly as console DLL
 100 XCrdStreamingStart implemented | xcrd2: XVD streaming 0x78000030-48,0x80,0xa4,0xa8,0xdc
 101 XCrdStreamingStop implemented | xcrd2: XVD streaming 0x78000030-48,0x80,0xa4,0xa8,0xdc
 102 XCrdStreamingAdjustStreamingFlags implemented | xcrd2: XVD streaming 0x78000030-48,0x80,0xa4,0xa8,0xdc

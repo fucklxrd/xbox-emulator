@@ -58,60 +58,23 @@ pub unsafe extern "system" fn set_debug_flags_x(this: *mut c_void, flags: u32) -
     S_OK
 }
 
-fn page_pools() -> &'static Mutex<Vec<(u64, u32)>> {
-    static P: OnceLock<Mutex<Vec<(u64, u32)>>> = OnceLock::new();
-    P.get_or_init(|| Mutex::new(Vec::new()))
-}
-
-pub fn register_page_pool(va: u64, pages: u32) -> u32 {
-    let mut p = page_pools().lock().unwrap();
-    if let Some(i) = p.iter().position(|&(a, n)| a == va && n == pages) {
-        return i as u32;
-    }
-    p.push((va, pages));
-    (p.len() - 1) as u32
-}
-
-#[allow(dead_code)]
-pub fn page_pool(index: u32) -> Option<(u64, u32)> {
-    page_pools().lock().unwrap().get(index as usize).copied()
-}
-
-pub fn unregister_page_pool(index: u64) -> bool {
-    let mut p = page_pools().lock().unwrap();
-    match p.get_mut(index as usize) {
-        Some(e) if e.1 != 0 => {
-            *e = (0, 0);
-            true
-        }
-        _ => false,
-    }
-}
-
-pub unsafe extern "system" fn unregister_page_pool_x(_this: *mut c_void, index: u64) -> i32 {
+pub unsafe extern "system" fn unregister_page_pool_x(_this: *mut c_void, handle: u64) -> i32 {
     static N: AtomicUsize = AtomicUsize::new(0);
-    let ok = unregister_page_pool(index);
-    if !ok || once(&N, 8) {
-        record("d3d12_xs", "UnregisterPagePoolX", &format!("pool {index} -> {}", if ok { "S_OK" } else { "E_FAIL (not a registered pool)" }));
+    let hr = crate::kmd_slots::unregister_page_pool(handle);
+    if hr != S_OK || once(&N, 8) {
+        record("d3d12_xs", "UnregisterPagePoolX", &format!("pool {handle:#x} -> {hr:#010x} (IOCTL 0x7900c23b on the emulated KMD)"));
     }
-    if ok { S_OK } else { E_FAIL }
+    hr
 }
 
-pub unsafe extern "system" fn register_page_pool_x(_this: *mut c_void, va: u64, pages: u32, out: *mut u32) -> i32 {
+pub unsafe extern "system" fn register_page_pool_x(_this: *mut c_void, va: u64, pages: u32, out: *mut u64) -> i32 {
     static N: AtomicUsize = AtomicUsize::new(0);
-    if va == 0 || pages == 0 {
-        record("d3d12_xs", "RegisterPagePoolX", &format!("va={va:#x} pages={pages} -> E_INVALIDARG"));
-        return E_INVALIDARG;
+    let hr = crate::kmd_slots::register_page_pool(va, pages, out);
+    if hr != S_OK || once(&N, 8) {
+        let h = if out.is_null() { 0 } else { unsafe { core::ptr::read_unaligned(out) } };
+        record("d3d12_xs", "RegisterPagePoolX", &format!("va={va:#x} pages={pages} ({} KiB) -> {hr:#010x} pool {h:#x} (IOCTL 0x7900c23b on the emulated KMD)", pages as u64 * 64));
     }
-    let index = register_page_pool(va, pages);
-    if !out.is_null() {
-        unsafe { *out = index };
-    }
-    if once(&N, 8) {
-        record("d3d12_xs", "RegisterPagePoolX", &format!(
-            "va={va:#x} pages={pages} ({} KiB) -> pool {index}", pages as u64 * 64));
-    }
-    S_OK
+    hr
 }
 
 const E_ACCESSDENIED: i32 = 0x8007_0005u32 as i32;
@@ -675,25 +638,32 @@ mod tests {
     }
 
     #[test]
-    fn page_pool_indices_are_stable() {
-        let a = register_page_pool(0x1_0000_0000, 16);
-        let b = register_page_pool(0x2_0000_0000, 4);
+    fn page_pool_slots_use_the_emulated_kmd() {
+        let _g = crate::kmd_slots::test_serial();
+        let mem = vec![0u8; 0x5_0000];
+        let va = ((mem.as_ptr() as u64) + 0xffff) & !0xffff;
+        let (mut a, mut b) = (0u64, 0u64);
+        assert_eq!(unsafe { register_page_pool_x(core::ptr::null_mut(), va, 2, &mut a) }, S_OK);
+        assert_eq!(unsafe { register_page_pool_x(core::ptr::null_mut(), va, 2, &mut b) }, S_OK);
         assert_ne!(a, b);
-        assert_eq!(register_page_pool(0x1_0000_0000, 16), a);
-        assert_eq!(page_pool(b), Some((0x2_0000_0000, 4)));
-        let mut out = 0xffff_ffffu32;
-        assert_eq!(unsafe { register_page_pool_x(core::ptr::null_mut(), 0x3_0000_0000, 2, &mut out) }, S_OK);
-        assert_eq!(page_pool(out), Some((0x3_0000_0000, 2)));
-        assert_eq!(unsafe { register_page_pool_x(core::ptr::null_mut(), 0, 2, &mut out) }, E_INVALIDARG);
+        assert_eq!(crate::kmd_slots::page_pool(a), Some((va, 2)));
+        assert_eq!(unsafe { register_page_pool_x(core::ptr::null_mut(), 0, 2, &mut a) }, E_INVALIDARG);
+        assert_eq!(unsafe { unregister_page_pool_x(core::ptr::null_mut(), b) }, S_OK);
+        drop(mem);
     }
 
     #[test]
     fn unregister_page_pool_matches_release_driver() {
-        let i = register_page_pool(0x7_0000_0000, 8);
-        assert_eq!(unsafe { unregister_page_pool_x(core::ptr::null_mut(), i as u64) }, S_OK);
-        assert_eq!(page_pool(i), Some((0, 0)));
-        assert_eq!(unsafe { unregister_page_pool_x(core::ptr::null_mut(), i as u64) }, E_FAIL);
-        assert_eq!(unsafe { unregister_page_pool_x(core::ptr::null_mut(), 0xffff) }, E_FAIL);
+        let _g = crate::kmd_slots::test_serial();
+        let mem = vec![0u8; 0x3_0000];
+        let va = ((mem.as_ptr() as u64) + 0xffff) & !0xffff;
+        let mut i = 0u64;
+        assert_eq!(unsafe { register_page_pool_x(core::ptr::null_mut(), va, 1, &mut i) }, S_OK);
+        assert_eq!(unsafe { unregister_page_pool_x(core::ptr::null_mut(), i) }, S_OK);
+        assert_eq!(crate::kmd_slots::page_pool(i), None);
+        assert_eq!(unsafe { unregister_page_pool_x(core::ptr::null_mut(), i) }, E_FAIL);
+        assert_eq!(unsafe { unregister_page_pool_x(core::ptr::null_mut(), 0xffff_0000_0000) }, E_FAIL);
+        drop(mem);
     }
 
     #[test]

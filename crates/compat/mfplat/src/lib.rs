@@ -2,6 +2,7 @@
 
 pub mod reset;
 pub mod fortnite_trace;
+pub mod platform;
 
 pub mod exports {
     include!(concat!(env!("OUT_DIR"), "/forwarded.rs"));
@@ -130,6 +131,9 @@ pub unsafe extern "system" fn MFStartup(version: u32, flags: u32) -> i32 {
         PRIVATE_WORKQUEUES.store(1, Ordering::SeqCst);
     }
     let n = if hr >= 0 { STARTED.fetch_add(1, Ordering::SeqCst) + 1 } else { STARTED.load(Ordering::SeqCst) };
+    if hr >= 0 {
+        platform::on_startup(version, flags);
+    }
     if STARTUP_LOGS.fetch_add(1, Ordering::Relaxed) < 16 {
         compat_common::record("mfplat", "MFStartup", &format!("version={version:#x} flags={flags:#x} -> hr={:#010x} startups={n}", hr as u32));
     }
@@ -146,6 +150,9 @@ pub unsafe extern "system" fn MFShutdown() -> i32 {
     let f: ShutdownFn = unsafe { core::mem::transmute(p) };
     let hr = unsafe { f() };
     let prev = STARTED.fetch_update(Ordering::SeqCst, Ordering::SeqCst, |v| Some((v - 1).max(0))).unwrap_or(0);
+    if prev > 0 {
+        platform::on_shutdown();
+    }
     let n = (prev - 1).max(0);
     if STARTUP_LOGS.fetch_add(1, Ordering::Relaxed) < 16 {
         compat_common::record("mfplat", "MFShutdown", &format!("-> hr={:#010x} startups={n}", hr as u32));
@@ -169,13 +176,12 @@ pub unsafe extern "system" fn MFResetDXGIDeviceManagerX(device_manager: *mut c_v
 }
 
 #[no_mangle]
-pub extern "system" fn LFGetGlobalPool() -> *mut c_void {
-    core::ptr::null_mut()
+pub extern "system" fn MFGetPlatform() -> *mut c_void {
+    platform::platform()
 }
 
 #[no_mangle]
-pub extern "system" fn MFGetPlatform() -> *mut c_void {
-    compat_common::record("mfplat", "MFGetPlatform", "console returns its internal CMFPlatform object (null before MFStartup); PC has no such object -> null");
+pub extern "system" fn LFGetGlobalPool() -> *mut c_void {
     core::ptr::null_mut()
 }
 

@@ -63,6 +63,7 @@ unsafe extern "system" fn cb(h: *mut c_void, _ctx: usize, status: u32, info: *mu
 }
 
 #[test]
+#[cfg_attr(not(tombox_backend_data), ignore = "needs crates/compat/compat-common/backend_data")]
 fn async_secure_post_through_guard_verifies_and_completes() {
     std::env::set_var("TOMBOX_NET_BACKEND", "builtin");
     std::env::set_var("TOMBOX_NET_TITLE", "fortnite");

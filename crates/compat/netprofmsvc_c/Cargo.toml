@@ -2,7 +2,7 @@
 name = "netprofmsvc_c"
 version = "0.1.0"
 edition = "2021"
-description = "Compat DLL for the console netprofmsvc_c.dll (Network Profile service): the svchost globals push; the service body is not ported."
+description = "Compat DLL for the console netprofmsvc_c.dll (Network Profile service): the svchost globals push and the console DllMain (TraceLogging provider, aggregate state, wil failure callback); the service body is not ported."
 license = "MIT OR Apache-2.0"
 build = "build.rs"
 
@@ -12,4 +12,7 @@ crate-type = ["cdylib", "rlib"]
 path = "src/lib.rs"
 
 [build-dependencies]
+xone-exports = { path = "../xone-exports" }
+
+[dev-dependencies]
 xone-exports = { path = "../xone-exports" }

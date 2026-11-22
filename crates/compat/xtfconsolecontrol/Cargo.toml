@@ -1,0 +1,24 @@
+[package]
+name = "xtfconsolecontrol"
+version = "0.1.0"
+edition = "2021"
+description = "Compat DLL for the console xtfconsolecontrol.dll (Xbox Tools Framework console-control server extension: config/settings tables, shutdown, running processes, system time, pending updates, screenshot markers, connected standby and stack dumps over the process-local console sandbox)."
+license = "MIT OR Apache-2.0"
+build = "build.rs"
+
+[lib]
+name = "xtfconsolecontrol"
+crate-type = ["cdylib", "rlib"]
+path = "src/lib.rs"
+
+[dependencies]
+xtfcommon = { path = "../xtfcommon" }
+xtfmsg = { path = "../xtfmsg" }
+console-sandbox = { path = "../console-sandbox" }
+compat-common = { path = "../compat-common" }
+
+[build-dependencies]
+xtfcommon = { path = "../xtfcommon" }
+
+[dev-dependencies]
+xbtp = { path = "../xbtp" }

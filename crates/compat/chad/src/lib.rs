@@ -452,6 +452,27 @@ mod tests {
     }
 
     #[test]
+    fn fft_and_ifft_streams_validate_then_report_blocked() {
+        let _g = SERIAL.lock().unwrap_or_else(|e| e.into_inner());
+        let mut buf = vec![0u8; 0x10000];
+        let mut cl: *mut Client = core::ptr::null_mut();
+        assert_eq!(XDspConnect(buf.as_mut_ptr() as *mut c_void, buf.len() as u32, 4, &mut cl), S_OK);
+        for kind in [2u32, 3] {
+            let mut d = desc(0, 0x400, 1, 0, core::ptr::null());
+            d[0..4].copy_from_slice(&kind.to_le_bytes());
+            let (mut st, mut ctx) = (core::ptr::null_mut(), core::ptr::null_mut());
+            assert_eq!(XDspActivate(cl, d.as_ptr(), &mut st, &mut ctx), E_NOTIMPL, "type {kind}");
+            assert!(ctx.is_null());
+            let mut bad = d;
+            bad[12..16].copy_from_slice(&2u32.to_le_bytes());
+            assert_eq!(XDspActivate(cl, bad.as_ptr(), &mut st, &mut ctx), E_INVALIDARG, "type {kind} stereo");
+        }
+        assert_eq!(XDspDisconnect(cl), S_OK);
+        let row = include_str!("../exports.txt").lines().find(|l| l.split_whitespace().nth(1) == Some("XDspActivate")).unwrap();
+        assert_eq!(row.split_whitespace().nth(2), Some("stub"), "XDspActivate must stay labelled stub while FFT/IFFT are blocked");
+    }
+
+    #[test]
     fn fft_roundtrip() {
         let fft = Fft::new(16);
         let t: Vec<f32> = (0..16).map(|i| (i as f32 * 0.7).sin()).collect();

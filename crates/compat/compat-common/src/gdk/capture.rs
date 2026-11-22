@@ -333,15 +333,15 @@ pub fn encode_clip(begin: u64, end: u64, prefix: &str) -> Result<Clip, i32> {
     Ok(Clip { path, size, start_s: (first / 1000) as i64, duration_ms: (n as u64 * 1000 / HISTORY_FPS) as u32, w: ew, h: eh })
 }
 
-unsafe extern "system" fn diagnostic_clip(_t: This, start: *const i64, duration_ms: u32, prefix: *const u8, out: *mut u8) -> i32 {
-    if out.is_null() || start.is_null() || duration_ms == 0 {
+unsafe extern "system" fn diagnostic_clip(_t: This, start: i64, duration_ms: u32, prefix: *const u8, out: *mut u8) -> i32 {
+    if out.is_null() || duration_ms == 0 {
         return E_INVALIDARG;
     }
     start_history();
     let max_ms = history_seconds() * 1000;
     let duration = (duration_ms as u64).min(max_ms);
     let now = now_ms();
-    let mut begin = (*start).max(0) as u64 * 1000;
+    let mut begin = start.max(0) as u64 * 1000;
     if begin + duration > now + max_ms {
         return E_INVALIDARG;
     }

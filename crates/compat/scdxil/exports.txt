@@ -1,7 +1,7 @@
-1 SCDxil_DxcCreateInstance forwarded | console calls its embedded DxcCreateInstance2(NULL malloc); mapped to the emulator dxcompiler_xs DxcCreateInstance2 (host DXC or native IDxcUtils)
+1 SCDxil_DxcCreateInstance implemented | code thunk, not a PE forwarder: console calls its embedded DxcCreateInstance2(NULL malloc); mapped to the emulator dxcompiler_xs DxcCreateInstance2 (host DXC or native IDxcUtils)
 2 SCDxil_GetDriverShaderCode implemented | console DXBC container validation (v1, contiguous in-order parts, size <= 2 GiB) then the DXIL part data; 0 on success, 3 otherwise
-3 SCDxil_GetExternalILInterface forwarded | console scdxil.dll from the title dump (newbe.dll preloaded); fills its 3 IL-builder entry points into out and returns out; no console module -> NULL
+3 SCDxil_GetExternalILInterface implemented | code thunk, not a PE forwarder: console scdxil.dll from the title dump (newbe.dll preloaded); fills its 3 IL-builder entry points into out and returns out; no console module -> NULL
 4 SCDxil_GetOriginalShader implemented | console DXIL program-header check, XDAT part 7 (original) then its part 11 (replacement) lookup, {pointer, size} result; an invalid part 11 (console throws) returns {NULL, 0}
 5 SCDxil_IsDxilShader implemented | console DxilProgramHeader/bitcode-range checks against the given size
 6 SCDxil_IsStageSupportedByNewBE implemented | console stage table: mode bits 27-28 of +0xc (1 or 3 = all 25 stages, 0/2 = none), stage = bits 21-25 of +0x18
-7 SCDxil_SCSimpleCompileShader forwarded | console scdxil.dll DXIL to Durango GCN back end (newbe.dll); console returns 0 ok, 4 unsupported stage, 1 on exception; no console module -> 1
+7 SCDxil_SCSimpleCompileShader implemented | code thunk, not a PE forwarder: console scdxil.dll DXIL to Durango GCN back end (newbe.dll); console returns 0 ok, 4 unsupported stage, 1 on exception; no console module -> 1

@@ -6,13 +6,15 @@ const NATIVE: &[&str] = &[
     "MFShutdown",
     "MFResetDXGIDeviceManagerX",
     "MFCreateDXGISurfaceBufferX",
-    "MFGetPlatform",
     "LFGetGlobalPool",
     "MFBlockThread",
     "MFUnblockThread",
     "MFJoinIoPort",
     "MFGetPrivateWorkqueues",
+    "MFGetPlatform",
 ];
+
+const MISSING: &[&str] = &[];
 
 const SURFACE_ALIAS: (&str, &str) = ("MFCreateDXGISurfaceBufferX", "MFCreateDXGISurfaceBuffer");
 
@@ -114,7 +116,7 @@ fn main() {
 
     let mut forwarded: BTreeSet<String> = pc.iter().filter(|n| !NATIVE.contains(&n.as_str())).cloned().collect();
     for c in &console {
-        if !NATIVE.contains(&c.as_str()) {
+        if !NATIVE.contains(&c.as_str()) && !MISSING.contains(&c.as_str()) {
             forwarded.insert(c.clone());
         }
     }
@@ -129,6 +131,11 @@ fn main() {
     rs.push_str(&format!("pub const FORWARD_SOURCE: &str = {source:?};\n"));
     rs.push_str("pub static FORWARDED: &[&str] = &[\n");
     for n in &forwarded {
+        rs.push_str(&format!("    {n:?},\n"));
+    }
+    rs.push_str("];\n");
+    rs.push_str("pub static MISSING: &[&str] = &[\n");
+    for n in MISSING {
         rs.push_str(&format!("    {n:?},\n"));
     }
     rs.push_str("];\n");

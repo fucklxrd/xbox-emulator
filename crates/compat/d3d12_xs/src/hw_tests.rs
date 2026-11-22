@@ -338,16 +338,80 @@ fn hw_gds_round_trip_through_the_shader_binding() {
     }
 }
 
+fn counter_window(t0: i64, t1: i64, qpf: i64) -> (u64, u64) {
+    let hz = crate::sys_ts::system_counter_hz() as u128;
+    let tol = hz / 500;
+    let lo = (t0 as u128 * hz / qpf as u128).saturating_sub(tol);
+    let hi = t1 as u128 * hz / qpf as u128 + tol;
+    (lo as u64, hi as u64)
+}
+
 #[test]
 #[ignore = "needs a D3D12 device; run: cargo test -p d3d12_xs --lib hw_ -- --ignored --test-threads=1 (TOMBOX_HW_ADAPTER=warp for WARP)"]
-fn hw_system_timestamp_is_monotonic_and_close_to_qpc() {
+fn hw_system_timestamp_counts_the_console_gpu_clock_from_the_qpc_epoch() {
     let g = gpu();
     unsafe {
         let out = buffer(g.dev, HEAP_READBACK, 64, 0, ST_COPY_DEST);
+        let w = |l: *mut c_void, va: u64, flags: u32| call!(l, crate::cl_ext::CL_WRITE64_BOTTOM_OF_PIPE, (u64, u64, u32, u32) -> (), va, 0, 0, flags);
         let l = title_list(g.dev);
-        call!(l, crate::cl_ext::CL_WRITE64_BOTTOM_OF_PIPE, (u64, u64, u32, u32) -> (), out.va, 0, 0, crate::cl_ext::BOP_FLAG_SYSTEM_TIMESTAMP);
-        call!(l, crate::cl_ext::CL_WRITE64_BOTTOM_OF_PIPE, (u64, u64, u32, u32) -> (), out.va + 8, 0, 0, crate::cl_ext::BOP_FLAG_SYSTEM_TIMESTAMP);
+        w(l, out.va, crate::cl_ext::BOP_FLAG_SYSTEM_TIMESTAMP);
+        w(l, out.va + 8, crate::cl_ext::BOP_FLAG_SYSTEM_TIMESTAMP);
+        w(l, out.va + 16, crate::cl_ext::BOP_FLAG_GPU_TIMESTAMP);
         assert!(call!(l, X_CLOSE, () -> i32) >= 0);
+        let l2 = title_list(g.dev);
+        w(l2, out.va + 24, crate::cl_ext::BOP_FLAG_GPU_TIMESTAMP);
+        w(l2, out.va + 32, crate::cl_ext::BOP_FLAG_SYSTEM_TIMESTAMP);
+        assert!(call!(l2, X_CLOSE, () -> i32) >= 0);
+        let (mut t0, mut t1, mut t2, mut t3, mut qpf) = (0i64, 0i64, 0i64, 0i64, 0i64);
+        QueryPerformanceFrequency(&mut qpf);
+        let f = fence(g.dev);
+        QueryPerformanceCounter(&mut t0);
+        submit(g.a, l, f, 1);
+        assert!(reached(f, 1, Duration::from_secs(5)));
+        QueryPerformanceCounter(&mut t1);
+        std::thread::sleep(Duration::from_millis(200));
+        QueryPerformanceCounter(&mut t2);
+        submit(g.a, l2, f, 2);
+        assert!(reached(f, 2, Duration::from_secs(5)));
+        QueryPerformanceCounter(&mut t3);
+        let q = |o: usize| core::ptr::read_volatile(out.cpu.add(o) as *const u64);
+        let (v0, v1, a0, a1, v2) = (q(0), q(8), q(16), q(24), q(32));
+        let who = if g.warp { "WARP" } else { "hardware" };
+        assert!(v0 != 0 && v1 != 0 && v2 != 0, "SYSTEM_TIMESTAMP not written");
+        assert!(v0 <= v1 && v1 < v2, "not monotonic: {v0} {v1} {v2}");
+        let (lo, hi) = counter_window(t0, t1, qpf);
+        assert!(v0 >= lo && v1 <= hi, "{who}: counter window [{lo}, {hi}] but SYSTEM_TIMESTAMP {v0}, {v1}");
+        let (lo2, hi2) = counter_window(t2, t3, qpf);
+        assert!(v2 >= lo2 && v2 <= hi2, "{who}: counter window [{lo2}, {hi2}] but SYSTEM_TIMESTAMP {v2}");
+        let mut gf = 0u64;
+        assert!(call!(g.a, 16, (*mut u64) -> i32, &mut gf) >= 0 && gf != 0);
+        let hz = crate::sys_ts::system_counter_hz() as f64;
+        let want = (a1 - a0) as f64 * hz / gf as f64;
+        let got = (v2 - v1) as f64;
+        assert!((got - want).abs() <= want * 0.001 + hz * 0.0002, "{who}: SYSTEM delta {got} vs GPU delta scaled to {hz} Hz {want}");
+        let wall = (t3 - t0) as f64 / qpf as f64;
+        assert!(got / hz >= 0.19 && got / hz <= wall + 0.01, "{who}: SYSTEM delta {} s outside [0.19, {wall}] s", got / hz);
+    }
+}
+
+#[test]
+#[ignore = "needs a D3D12 device; run: cargo test -p d3d12_xs --lib hw_ -- --ignored --test-threads=1 (TOMBOX_HW_ADAPTER=warp for WARP)"]
+fn hw_write64_bottom_of_pipe_follows_the_release_umd_for_every_flag_and_flush_combination() {
+    let g = gpu();
+    unsafe {
+        let out = buffer(g.dev, HEAP_READBACK, 256, 0, ST_COPY_DEST);
+        let l = title_list(g.dev);
+        let w = |va: u64, value: u64, flush: u32, flags: u32| call!(l, crate::cl_ext::CL_WRITE64_BOTTOM_OF_PIPE, (u64, u64, u32, u32) -> (), va, value, flush, flags);
+        w(out.va, 0x1122_3344_5566_7788, 0, 0x80);
+        w(out.va + 8, 0xab, 0x4800, 0);
+        w(out.va + 16, 0, 0x3800, 3);
+        w(out.va + 24, 5, 0x800, 1);
+        w(out.va + 32, 9, 0x1000, 0x30);
+        w(out.va + 40, 0, 0x3800, 2);
+        w(out.va + 48, 0xdead, 0x2000, 0x10);
+        w(out.va + 60, 1, 0, 0);
+        assert!(call!(l, X_CLOSE, () -> i32) >= 0);
+        w(out.va + 64, 1, 0, 0);
         let (mut t0, mut t1, mut qpf) = (0i64, 0i64, 0i64);
         QueryPerformanceFrequency(&mut qpf);
         let f = fence(g.dev);
@@ -355,11 +419,619 @@ fn hw_system_timestamp_is_monotonic_and_close_to_qpc() {
         submit(g.a, l, f, 1);
         assert!(reached(f, 1, Duration::from_secs(5)));
         QueryPerformanceCounter(&mut t1);
-        let v0 = core::ptr::read_volatile(out.cpu as *const u64) as i64;
-        let v1 = core::ptr::read_volatile(out.cpu.add(8) as *const u64) as i64;
-        let tol = qpf / 500;
-        assert!(v0 != 0 && v1 != 0, "SYSTEM_TIMESTAMP not written");
-        assert!(v0 <= v1, "not monotonic: {v0} > {v1}");
-        assert!(v0 >= t0 - tol && v1 <= t1 + tol, "{} QPC window [{t0}, {t1}] (tol {tol}) but timestamps {v0}, {v1}", if g.warp { "WARP" } else { "hardware" });
+        let q = |o: usize| core::ptr::read_volatile(out.cpu.add(o) as *const u64);
+        assert_eq!(q(0), 0x1122_3344_5566_7788, "an undefined flag bit dropped the value write");
+        assert_eq!(q(8), 0xab, "an undefined flush bit dropped the value write");
+        let (lo, hi) = counter_window(t0, t1, qpf);
+        let (gt0, gt1) = (q(16), q(24));
+        if crate::bop64::scarlett() {
+            assert!(gt0 >= lo && gt0 <= hi, "Scarlett: both TIMESTAMP flags must give the SYSTEM counter, got {gt0} outside [{lo}, {hi}]");
+            assert!(gt1 != 0 && gt1 != 5, "GPU timestamp {gt1} must ignore Value");
+        } else {
+            assert!(gt0 != 0 && gt1 >= gt0 && gt1 != 5, "GPU timestamps {gt0} {gt1}: GPU_TIMESTAMP must win over SYSTEM_TIMESTAMP and ignore Value");
+            let mut gf = 0u64;
+            assert!(call!(g.a, 16, (*mut u64) -> i32, &mut gf) >= 0 && gf != 0);
+            let span = (t1 - t0) as u128 * gf as u128 / qpf as u128;
+            assert!(((gt1 - gt0) as u128) <= span + 1, "two GPU timestamps of one list {gt0}..{gt1} further apart than the submit window");
+        }
+        assert_eq!(q(32), 9, "LRU|STREAM together dropped the value write");
+        let st = q(40);
+        assert!(st >= lo && st <= hi, "SYSTEM_TIMESTAMP {st} outside the console-clock window [{lo}, {hi}]");
+        assert_eq!(q(48), 0xdead);
+        assert_eq!(q(56), 0, "a write to a destination off 8-byte alignment was recorded");
+        assert_eq!(q(64), 0, "a write recorded into a closed list reached the GPU");
     }
 }
+
+#[test]
+#[ignore = "needs a D3D12 device; run: cargo test -p d3d12_xs --lib hw_ -- --ignored --test-threads=1 (TOMBOX_HW_ADAPTER=warp for WARP)"]
+fn hw_write64_value_lands_as_one_copy_ignores_and_keeps_title_predication() {
+    let g = gpu();
+    unsafe {
+        let pred = buffer(g.dev, HEAP_UPLOAD, 256, 0, ST_GENERIC_READ);
+        core::ptr::write_volatile(pred.cpu as *mut u64, 0);
+        let src = buffer(g.dev, HEAP_UPLOAD, 256, 0, ST_GENERIC_READ);
+        core::ptr::write_volatile(src.cpu as *mut u64, 0xeeee_eeee_eeee_eeee);
+        let dst = buffer(g.dev, HEAP_DEFAULT, 256, 0, ST_COPY_DEST);
+        let out = buffer(g.dev, HEAP_READBACK, 256, 0, ST_COPY_DEST);
+        let l = title_list(g.dev);
+        call!(l, 31, (*mut c_void, u64, u32) -> (), pred.res as *mut c_void, 0, 0);
+        for i in 0..8u64 {
+            call!(l, crate::cl_ext::CL_WRITE64_BOTTOM_OF_PIPE, (u64, u64, u32, u32) -> (), dst.va + 8 * i, 0x0102_0304_0506_0700 + i, 0x800, 0);
+        }
+        call!(l, X_COPY_BUFFER_REGION, (usize, u64, usize, u64, u64) -> (), dst.res, 64, src.res, 0, 8);
+        call!(l, crate::cl_ext::CL_WRITE64_BOTTOM_OF_PIPE, (u64, u64, u32, u32) -> (), out.va + 128, u64::MAX - 1, 0, 0);
+        call!(l, 31, (*mut c_void, u64, u32) -> (), core::ptr::null_mut::<c_void>(), 0, 0);
+        let mut b = [0u8; 32];
+        b[8..16].copy_from_slice(&(dst.res as u64).to_le_bytes());
+        b[16..20].copy_from_slice(&0xffff_ffffu32.to_le_bytes());
+        b[20..24].copy_from_slice(&ST_COPY_DEST.to_le_bytes());
+        b[24..28].copy_from_slice(&ST_COPY_SOURCE.to_le_bytes());
+        call!(l, X_BARRIER, (u32, *const u8) -> (), 1, b.as_ptr());
+        call!(l, X_COPY_BUFFER_REGION, (usize, u64, usize, u64, u64) -> (), out.res, 0, dst.res, 0, 72);
+        assert!(call!(l, X_CLOSE, () -> i32) >= 0);
+        let f = fence(g.dev);
+        submit(g.a, l, f, 1);
+        assert!(reached(f, 1, Duration::from_secs(5)));
+        let q = |o: usize| core::ptr::read_volatile(out.cpu.add(o) as *const u64);
+        for i in 0..8 {
+            assert_eq!(q(8 * i), 0x0102_0304_0506_0700 + i as u64, "value {i} under title predication");
+        }
+        assert_eq!(q(64), 0, "the title's predication was not restored after the value copy");
+        assert_eq!(q(128), u64::MAX - 1);
+    }
+}
+
+#[test]
+#[ignore = "needs a D3D12 device; run: cargo test -p d3d12_xs --lib hw_ -- --ignored --test-threads=1 (TOMBOX_HW_ADAPTER=warp for WARP)"]
+fn hw_write64_into_a_closed_list_is_not_recorded() {
+    let g = gpu();
+    unsafe {
+        let out = buffer(g.dev, HEAP_READBACK, 256, 0, ST_COPY_DEST);
+        let l = title_list(g.dev);
+        assert!(call!(l, X_CLOSE, () -> i32) >= 0);
+        call!(l, crate::cl_ext::CL_WRITE64_BOTTOM_OF_PIPE, (u64, u64, u32, u32) -> (), out.va + 64, 1, 0, 0);
+        let f = fence(g.dev);
+        submit(g.a, l, f, 1);
+        assert!(reached(f, 1, Duration::from_secs(5)));
+        let q = |o: usize| core::ptr::read_volatile(out.cpu.add(o) as *const u64);
+        assert_eq!(q(64), 0, "a write recorded into a closed list reached the GPU");
+    }
+}
+
+const X_PREDICATION: usize = 31;
+const X_SET_COMPUTE_ROOT_UAV: usize = 45;
+const X_CLOSE_BUNDLE: usize = 92;
+const ST_UAV: u32 = 0x8;
+const ST_PREDICATION: u32 = 0x200;
+
+unsafe fn bundle_list(dev: usize) -> *mut c_void {
+    let mut a: *mut c_void = core::ptr::null_mut();
+    assert!(call!(dev, 9, (u32, *const Guid, *mut *mut c_void) -> i32, 1, &IID_ALLOCATOR, &mut a) >= 0);
+    let mut l: *mut c_void = core::ptr::null_mut();
+    assert!(call!(dev, 12, (u32, u32, *mut c_void, *mut c_void, *const Guid, *mut *mut c_void) -> i32, 0, 1, a, core::ptr::null_mut(), &IID_LIST, &mut l) >= 0);
+    crate::cmdlist_wrap::wrap(l)
+}
+
+unsafe fn raw_barrier(l: *mut c_void, res: usize, before: u32, after: u32) {
+    let mut b = [0u8; 32];
+    b[8..16].copy_from_slice(&(res as u64).to_le_bytes());
+    b[16..20].copy_from_slice(&0xffff_ffffu32.to_le_bytes());
+    b[20..24].copy_from_slice(&before.to_le_bytes());
+    b[24..28].copy_from_slice(&after.to_le_bytes());
+    call!(l, X_BARRIER, (u32, *const u8) -> (), 1, b.as_ptr());
+}
+
+#[test]
+#[ignore = "needs a D3D12 device; run: cargo test -p d3d12_xs --lib hw_ -- --ignored --test-threads=1 (TOMBOX_HW_ADAPTER=warp for WARP)"]
+fn hw_execute_indirect_bundle_honours_gpu_size_max_records_and_predication() {
+    let g = gpu();
+    unsafe {
+        let (rs, pso) = compute_pso(g.dev, "#define RS \"RootConstants(num32BitConstants=1, b0), UAV(u0)\"\ncbuffer C : register(b0) { uint idx; };\nRWByteAddressBuffer o : register(u0);\n[RootSignature(RS)]\n[numthreads(1, 1, 1)]\nvoid main() { uint p; o.InterlockedAdd(idx * 4, 1u, p); }\n", None);
+        let out = buffer(g.dev, HEAP_DEFAULT, 256, FLAG_UAV, ST_UAV);
+        let rb = buffer(g.dev, HEAP_READBACK, 256, 0, ST_COPY_DEST);
+        let bb = buffer(g.dev, HEAP_UPLOAD, 4096, 0, ST_GENERIC_READ);
+        core::ptr::write_bytes(bb.cpu, 0, 4096);
+        crate::placed::register(bb.res as *mut c_void, crate::placed::Placed { va: bb.cpu as u64, desc: [0u8; 0x38], init_state: ST_GENERIC_READ });
+        let mut bundles = Vec::new();
+        for i in 0..2u32 {
+            let b = bundle_list(g.dev);
+            call!(b, X_SET_COMPUTE_ROOT_SIGNATURE, (*mut c_void) -> (), rs);
+            call!(b, X_SET_PSO, (*mut c_void) -> (), pso);
+            call!(b, X_SET_COMPUTE_ROOT_CONSTANT, (u32, u32, u32) -> (), 0, i, 0);
+            call!(b, X_SET_COMPUTE_ROOT_UAV, (u32, u64) -> (), 1, out.va);
+            call!(b, X_DISPATCH, (u32, u32, u32) -> (), 1, 1, 1);
+            let mut dst = bb.cpu.add(0x100 + 16 * i as usize) as *mut c_void;
+            assert_eq!(call!(b, X_CLOSE_BUNDLE, (*mut *mut c_void, u32) -> u32, &mut dst, 16), 16);
+            bundles.push(b);
+        }
+        let szb = buffer(g.dev, HEAP_DEFAULT, 256, FLAG_UAV, ST_COMMON);
+        let pb = buffer(g.dev, HEAP_DEFAULT, 256, FLAG_UAV, ST_COMMON);
+        let bb2 = buffer(g.dev, HEAP_DEFAULT, 256, 0, ST_COMMON);
+        let (wrs, wpso) = compute_pso(g.dev, "#define RS \"UAV(u0), UAV(u1)\"\nRWByteAddressBuffer s : register(u0);\nRWByteAddressBuffer q : register(u1);\n[RootSignature(RS)]\n[numthreads(1, 1, 1)]\nvoid main() { s.Store4(0, uint4(16, 0, 48, 32)); q.Store2(0, uint2(0, 0)); }\n", None);
+        let p = raw_list(g.dev);
+        call!(p, PC_SET_COMPUTE_ROOT_SIGNATURE, (*mut c_void) -> (), wrs);
+        call!(p, X_SET_PSO, (*mut c_void) -> (), wpso);
+        call!(p, PC_SET_COMPUTE_ROOT_UAV, (u32, u64) -> (), 0, szb.va);
+        call!(p, PC_SET_COMPUTE_ROOT_UAV, (u32, u64) -> (), 1, pb.va);
+        call!(p, X_DISPATCH, (u32, u32, u32) -> (), 1, 1, 1);
+        raw_barrier(p, bb2.res, ST_COMMON, ST_COPY_DEST);
+        call!(p, X_COPY_BUFFER_REGION, (usize, u64, usize, u64, u64) -> (), bb2.res, 0, bb.res, 0x100, 32);
+        raw_barrier(p, bb2.res, ST_COPY_DEST, ST_COMMON);
+        assert!(call!(p, X_CLOSE, () -> i32) >= 0);
+        let fp = fence(g.dev);
+        submit(g.a, p, fp, 1);
+        assert!(reached(fp, 1, Duration::from_secs(5)));
+        let l = title_list(g.dev);
+        let null = core::ptr::null_mut::<c_void>();
+        let eib = |res: usize, off: u64, max: u32, sz: *mut c_void, so: u32| call!(l, crate::cl_ext::CL_EXECUTE_INDIRECT_BUNDLE, (*mut c_void, u64, u32, *mut c_void, u32, u32) -> (), res as *mut c_void, off, max, sz, so, 0);
+        let mut n = 0u64;
+        let mut snap = || {
+            raw_barrier(l, out.res, ST_UAV, ST_COPY_SOURCE);
+            call!(l, X_COPY_BUFFER_REGION, (usize, u64, usize, u64, u64) -> (), rb.res, n * 8, out.res, 0, 8);
+            raw_barrier(l, out.res, ST_COPY_SOURCE, ST_UAV);
+            n += 1;
+        };
+        let szp = szb.res as *mut c_void;
+        eib(bb.res, 0x100, 32, null, 0);
+        snap();
+        eib(bb.res, 0x100, 32, szp, 0);
+        snap();
+        eib(bb.res, 0x100, 32, szp, 4);
+        snap();
+        eib(bb.res, 0x100, 16, szp, 8);
+        snap();
+        eib(bb.res, 0x100, 0x40, szp, 12);
+        snap();
+        raw_barrier(l, pb.res, ST_COMMON, ST_PREDICATION);
+        call!(l, X_PREDICATION, (*mut c_void, u64, u32) -> (), pb.res as *mut c_void, 0, 0);
+        eib(bb.res, 0x100, 32, null, 0);
+        call!(l, X_PREDICATION, (*mut c_void, u64, u32) -> (), null, 0, 0);
+        snap();
+        call!(l, X_PREDICATION, (*mut c_void, u64, u32) -> (), pb.res as *mut c_void, 0, 1);
+        eib(bb.res, 0x100, 32, null, 0);
+        call!(l, X_PREDICATION, (*mut c_void, u64, u32) -> (), null, 0, 0);
+        snap();
+        raw_barrier(l, pb.res, ST_PREDICATION, ST_COMMON);
+        eib(bb2.res, 0, 32, null, 0);
+        snap();
+        assert!(call!(l, X_CLOSE, () -> i32) >= 0);
+        let f = fence(g.dev);
+        submit(g.a, l, f, 1);
+        assert!(reached(f, 1, Duration::from_secs(5)));
+        let got: Vec<(u32, u32)> = (0..8).map(|i| (rd(&rb, i * 8), rd(&rb, i * 8 + 4))).collect();
+        assert_eq!(got, vec![(1, 1), (2, 1), (2, 1), (3, 1), (4, 2), (4, 2), (5, 3), (6, 4)], "per-call bundle execution counts (A, B)");
+        crate::placed::forget(bb.res as *mut c_void);
+        drop(bundles);
+    }
+}
+
+#[test]
+#[ignore = "needs a D3D12 device; run: cargo test -p d3d12_xs --lib hw_ -- --ignored --test-threads=1 (TOMBOX_HW_ADAPTER=warp for WARP)"]
+fn hw_execute_indirect_bundle_reads_the_size_at_each_execution_of_a_closed_list() {
+    let g = gpu();
+    unsafe {
+        let (rs, pso) = compute_pso(g.dev, "#define RS \"RootConstants(num32BitConstants=1, b0), UAV(u0)\"\ncbuffer C : register(b0) { uint idx; };\nRWByteAddressBuffer o : register(u0);\n[RootSignature(RS)]\n[numthreads(1, 1, 1)]\nvoid main() { uint p; o.InterlockedAdd(idx * 4, 1u, p); }\n", None);
+        let (srs, spso) = compute_pso(g.dev, "#define RS \"RootConstants(num32BitConstants=1, b0), UAV(u0)\"\ncbuffer C : register(b0) { uint v; };\nRWByteAddressBuffer o : register(u0);\n[RootSignature(RS)]\n[numthreads(1, 1, 1)]\nvoid main() { o.Store(0, v); }\n", None);
+        let out = buffer(g.dev, HEAP_DEFAULT, 256, FLAG_UAV, ST_UAV);
+        let rb = buffer(g.dev, HEAP_READBACK, 256, 0, ST_COPY_DEST);
+        let bb = buffer(g.dev, HEAP_UPLOAD, 256, 0, ST_GENERIC_READ);
+        core::ptr::write_bytes(bb.cpu, 0, 256);
+        crate::placed::register(bb.res as *mut c_void, crate::placed::Placed { va: bb.cpu as u64, desc: [0u8; 0x38], init_state: ST_GENERIC_READ });
+        for i in 0..2u32 {
+            let b = bundle_list(g.dev);
+            call!(b, X_SET_COMPUTE_ROOT_SIGNATURE, (*mut c_void) -> (), rs);
+            call!(b, X_SET_PSO, (*mut c_void) -> (), pso);
+            call!(b, X_SET_COMPUTE_ROOT_CONSTANT, (u32, u32, u32) -> (), 0, i, 0);
+            call!(b, X_SET_COMPUTE_ROOT_UAV, (u32, u64) -> (), 1, out.va);
+            call!(b, X_DISPATCH, (u32, u32, u32) -> (), 1, 1, 1);
+            let mut dst = bb.cpu.add(16 * i as usize) as *mut c_void;
+            assert_eq!(call!(b, X_CLOSE_BUNDLE, (*mut *mut c_void, u32) -> u32, &mut dst, 16), 16);
+        }
+        let szb = buffer(g.dev, HEAP_DEFAULT, 256, FLAG_UAV, ST_COMMON);
+        let l = title_list(g.dev);
+        call!(l, crate::cl_ext::CL_EXECUTE_INDIRECT_BUNDLE, (*mut c_void, u64, u32, *mut c_void, u32, u32) -> (), bb.res as *mut c_void, 0, 32, szb.res as *mut c_void, 0, 0);
+        raw_barrier(l, out.res, ST_UAV, ST_COPY_SOURCE);
+        call!(l, X_COPY_BUFFER_REGION, (usize, u64, usize, u64, u64) -> (), rb.res, 0, out.res, 0, 8);
+        raw_barrier(l, out.res, ST_COPY_SOURCE, ST_UAV);
+        assert!(call!(l, X_CLOSE, () -> i32) >= 0);
+        let mut got = Vec::new();
+        for (n, size) in [16u32, 32, 0, 48].into_iter().enumerate() {
+            let s = raw_list(g.dev);
+            call!(s, PC_SET_COMPUTE_ROOT_SIGNATURE, (*mut c_void) -> (), srs);
+            call!(s, X_SET_PSO, (*mut c_void) -> (), spso);
+            call!(s, 33, (u32, u32, u32) -> (), 0, size, 0);
+            call!(s, PC_SET_COMPUTE_ROOT_UAV, (u32, u64) -> (), 1, szb.va);
+            call!(s, X_DISPATCH, (u32, u32, u32) -> (), 1, 1, 1);
+            assert!(call!(s, X_CLOSE, () -> i32) >= 0);
+            let fs = fence(g.dev);
+            submit(g.a, s, fs, 1);
+            assert!(reached(fs, 1, Duration::from_secs(5)));
+            let f = fence(g.dev);
+            submit(g.a, l, f, 1);
+            assert!(reached(f, 1, Duration::from_secs(5)), "execution {n} did not complete");
+            got.push((rd(&rb, 0), rd(&rb, 4)));
+        }
+        assert_eq!(got, vec![(1, 0), (2, 1), (2, 1), (3, 2)], "each execution must follow the size the GPU holds at that execution");
+        crate::placed::forget(bb.res as *mut c_void);
+    }
+}
+
+const COUNT_HLSL: &str = "#define RS \"RootConstants(num32BitConstants=1, b0), UAV(u0)\"\ncbuffer C : register(b0) { uint idx; };\nRWByteAddressBuffer o : register(u0);\n[RootSignature(RS)]\n[numthreads(1, 1, 1)]\nvoid main() { uint p; o.InterlockedAdd(idx * 4, 1u, p); }\n";
+
+unsafe fn counting_bundle(dev: usize, rs: *mut c_void, pso: *mut c_void, idx: u32, out_va: u64) -> *mut c_void {
+    let b = unsafe { bundle_list(dev) };
+    call!(b, X_SET_COMPUTE_ROOT_SIGNATURE, (*mut c_void) -> (), rs);
+    call!(b, X_SET_PSO, (*mut c_void) -> (), pso);
+    call!(b, X_SET_COMPUTE_ROOT_CONSTANT, (u32, u32, u32) -> (), 0, idx, 0);
+    call!(b, X_SET_COMPUTE_ROOT_UAV, (u32, u64) -> (), 1, out_va);
+    call!(b, X_DISPATCH, (u32, u32, u32) -> (), 1, 1, 1);
+    b
+}
+
+unsafe fn close_bundle_into(b: *mut c_void, at: *mut u8) {
+    let mut dst = at as *mut c_void;
+    assert_eq!(call!(b, X_CLOSE_BUNDLE, (*mut *mut c_void, u32) -> u32, &mut dst, 16), 16);
+}
+
+#[test]
+#[ignore = "needs a D3D12 device; run: cargo test -p d3d12_xs --lib hw_ -- --ignored --test-threads=1 (TOMBOX_HW_ADAPTER=warp for WARP)"]
+fn hw_execute_indirect_bundle_runs_bundles_closed_after_the_call_at_each_submit() {
+    let g = gpu();
+    unsafe {
+        let (rs, pso) = compute_pso(g.dev, COUNT_HLSL, None);
+        let out = buffer(g.dev, HEAP_DEFAULT, 256, FLAG_UAV, ST_UAV);
+        let rb = buffer(g.dev, HEAP_READBACK, 256, 0, ST_COPY_DEST);
+        let bb = buffer(g.dev, HEAP_UPLOAD, 256, 0, ST_GENERIC_READ);
+        core::ptr::write_bytes(bb.cpu, 0, 256);
+        crate::placed::register(bb.res as *mut c_void, crate::placed::Placed { va: bb.cpu as u64, desc: [0u8; 0x38], init_state: ST_GENERIC_READ });
+        let a = counting_bundle(g.dev, rs, pso, 0, out.va);
+        let l = title_list(g.dev);
+        call!(l, crate::cl_ext::CL_EXECUTE_INDIRECT_BUNDLE, (*mut c_void, u64, u32, *mut c_void, u32, u32) -> (), bb.res as *mut c_void, 0, 32, core::ptr::null_mut::<c_void>(), 0, 0);
+        raw_barrier(l, out.res, ST_UAV, ST_COPY_SOURCE);
+        call!(l, X_COPY_BUFFER_REGION, (usize, u64, usize, u64, u64) -> (), rb.res, 0, out.res, 0, 8);
+        raw_barrier(l, out.res, ST_COPY_SOURCE, ST_UAV);
+        assert!(call!(l, X_CLOSE, () -> i32) >= 0);
+        close_bundle_into(a, bb.cpu);
+        let f = fence(g.dev);
+        submit(g.a, l, f, 1);
+        assert!(reached(f, 1, Duration::from_secs(5)));
+        let first = (rd(&rb, 0), rd(&rb, 4));
+        let b = counting_bundle(g.dev, rs, pso, 1, out.va);
+        close_bundle_into(b, bb.cpu.add(16));
+        submit(g.a, l, f, 2);
+        assert!(reached(f, 2, Duration::from_secs(5)));
+        let second = (rd(&rb, 0), rd(&rb, 4));
+        assert_eq!((first, second), ((1, 0), (2, 1)), "bundles closed after the call, before each ExecuteCommandLists, must be reachable");
+        crate::placed::forget(bb.res as *mut c_void);
+    }
+}
+
+#[test]
+#[ignore = "needs a D3D12 device; run: cargo test -p d3d12_xs --lib hw_ -- --ignored --test-threads=1 (TOMBOX_HW_ADAPTER=warp for WARP)"]
+fn hw_execute_indirect_bundle_survives_a_bundle_released_before_submit() {
+    let g = gpu();
+    unsafe {
+        let (rs, pso) = compute_pso(g.dev, COUNT_HLSL, None);
+        let out = buffer(g.dev, HEAP_DEFAULT, 256, FLAG_UAV, ST_UAV);
+        let rb = buffer(g.dev, HEAP_READBACK, 256, 0, ST_COPY_DEST);
+        let bb = buffer(g.dev, HEAP_UPLOAD, 256, 0, ST_GENERIC_READ);
+        core::ptr::write_bytes(bb.cpu, 0, 256);
+        crate::placed::register(bb.res as *mut c_void, crate::placed::Placed { va: bb.cpu as u64, desc: [0u8; 0x38], init_state: ST_GENERIC_READ });
+        let k = counting_bundle(g.dev, rs, pso, 5, out.va);
+        close_bundle_into(k, bb.cpu);
+        let kr = crate::cmdlist_wrap::unwrap(k) as usize;
+        let l = title_list(g.dev);
+        call!(l, crate::cl_ext::CL_EXECUTE_INDIRECT_BUNDLE, (*mut c_void, u64, u32, *mut c_void, u32, u32) -> (), bb.res as *mut c_void, 0, 16, core::ptr::null_mut::<c_void>(), 0, 0);
+        raw_barrier(l, out.res, ST_UAV, ST_COPY_SOURCE);
+        call!(l, X_COPY_BUFFER_REGION, (usize, u64, usize, u64, u64) -> (), rb.res, 0, out.res, 20, 4);
+        raw_barrier(l, out.res, ST_COPY_SOURCE, ST_UAV);
+        assert!(call!(l, X_CLOSE, () -> i32) >= 0);
+        assert!(crate::console_slots_cl2::live_bundles().contains(&kr));
+        assert!(call!(k, 2, () -> u32) >= 1, "the recorded part must keep the PC bundle alive");
+        assert!(!crate::console_slots_cl2::live_bundles().contains(&kr), "a bundle the title released is no longer a candidate");
+        let f = fence(g.dev);
+        submit(g.a, l, f, 1);
+        assert!(reached(f, 1, Duration::from_secs(5)));
+        assert_eq!(rd(&rb, 0), 0, "a released bundle must not run");
+        submit(g.a, l, f, 2);
+        assert!(reached(f, 2, Duration::from_secs(5)));
+        assert_eq!(crate::indirect_bundle::held_count(kr), 0, "references of the replaced part are dropped once the GPU is done with it");
+        crate::placed::forget(bb.res as *mut c_void);
+    }
+}
+
+#[test]
+#[ignore = "needs a D3D12 device; run: cargo test -p d3d12_xs --lib hw_ -- --ignored --test-threads=1 (TOMBOX_HW_ADAPTER=warp for WARP)"]
+fn hw_execute_bundle_state_carries_into_the_calling_list() {
+    let g = gpu();
+    unsafe {
+        let (rs, pso) = compute_pso(g.dev, COUNT_HLSL, None);
+        let (_, store) = compute_pso(g.dev, "#define RS \"RootConstants(num32BitConstants=1, b0), UAV(u0)\"\ncbuffer C : register(b0) { uint v; };\nRWByteAddressBuffer o : register(u0);\n[RootSignature(RS)]\n[numthreads(1, 1, 1)]\nvoid main() { o.Store(0, v); }\n", Some(rs));
+        let out = buffer(g.dev, HEAP_DEFAULT, 256, FLAG_UAV, ST_UAV);
+        let pout = buffer(g.dev, HEAP_DEFAULT, 256, FLAG_UAV, ST_UAV);
+        let rb = buffer(g.dev, HEAP_READBACK, 256, 0, ST_COPY_DEST);
+        let bb = buffer(g.dev, HEAP_UPLOAD, 256, 0, ST_GENERIC_READ);
+        let k = counting_bundle(g.dev, rs, pso, 3, out.va);
+        close_bundle_into(k, bb.cpu);
+        let l = title_list(g.dev);
+        call!(l, X_SET_COMPUTE_ROOT_SIGNATURE, (*mut c_void) -> (), rs);
+        call!(l, X_SET_PSO, (*mut c_void) -> (), store);
+        call!(l, X_SET_COMPUTE_ROOT_CONSTANT, (u32, u32, u32) -> (), 0, 7, 0);
+        call!(l, X_SET_COMPUTE_ROOT_UAV, (u32, u64) -> (), 1, pout.va);
+        call!(l, 27, (*mut c_void) -> (), k);
+        call!(l, X_DISPATCH, (u32, u32, u32) -> (), 1, 1, 1);
+        raw_barrier(l, pout.res, ST_UAV, ST_COPY_SOURCE);
+        call!(l, X_COPY_BUFFER_REGION, (usize, u64, usize, u64, u64) -> (), rb.res, 0, pout.res, 0, 4);
+        raw_barrier(l, out.res, ST_UAV, ST_COPY_SOURCE);
+        call!(l, X_COPY_BUFFER_REGION, (usize, u64, usize, u64, u64) -> (), rb.res, 4, out.res, 12, 4);
+        assert!(call!(l, X_CLOSE, () -> i32) >= 0);
+        let f = fence(g.dev);
+        submit(g.a, l, f, 1);
+        assert!(reached(f, 1, Duration::from_secs(5)));
+        assert_eq!((rd(&rb, 0), rd(&rb, 4)), (0, 2), "after ExecuteBundle the list must draw with the PSO, root signature, constants and UAV the bundle set");
+    }
+}
+
+#[test]
+#[ignore = "needs a D3D12 device; run: cargo test -p d3d12_xs --lib hw_ -- --ignored --test-threads=1 (TOMBOX_HW_ADAPTER=warp for WARP)"]
+fn hw_execute_indirect_bundle_has_no_candidate_budget() {
+    let g = gpu();
+    unsafe {
+        const N: u32 = 96;
+        let (rs, pso) = compute_pso(g.dev, COUNT_HLSL, None);
+        let out = buffer(g.dev, HEAP_DEFAULT, 512, FLAG_UAV, ST_UAV);
+        let rb = buffer(g.dev, HEAP_READBACK, 512, 0, ST_COPY_DEST);
+        let bb = buffer(g.dev, HEAP_UPLOAD, 4096, 0, ST_GENERIC_READ);
+        core::ptr::write_bytes(bb.cpu, 0, 4096);
+        crate::placed::register(bb.res as *mut c_void, crate::placed::Placed { va: bb.cpu as u64, desc: [0u8; 0x38], init_state: ST_GENERIC_READ });
+        for i in 0..N {
+            let b = counting_bundle(g.dev, rs, pso, i, out.va);
+            close_bundle_into(b, bb.cpu.add(16 * i as usize));
+        }
+        let live = crate::console_slots_cl2::live_bundles().len() as u64;
+        assert!(live * N as u64 > 4096, "{live} live bundles x {N} slots must exceed the old 4096-candidate budget");
+        let l = title_list(g.dev);
+        call!(l, crate::cl_ext::CL_EXECUTE_INDIRECT_BUNDLE, (*mut c_void, u64, u32, *mut c_void, u32, u32) -> (), bb.res as *mut c_void, 0, 16 * N, core::ptr::null_mut::<c_void>(), 0, 0);
+        raw_barrier(l, out.res, ST_UAV, ST_COPY_SOURCE);
+        call!(l, X_COPY_BUFFER_REGION, (usize, u64, usize, u64, u64) -> (), rb.res, 0, out.res, 0, 4 * N as u64);
+        raw_barrier(l, out.res, ST_COPY_SOURCE, ST_UAV);
+        assert!(call!(l, X_CLOSE, () -> i32) >= 0);
+        let f = fence(g.dev);
+        submit(g.a, l, f, 1);
+        assert!(reached(f, 1, Duration::from_secs(20)));
+        let got: Vec<u32> = (0..N as usize).map(|i| rd(&rb, 4 * i)).collect();
+        assert_eq!(got, vec![1; N as usize], "every record slot must run its bundle exactly once");
+        crate::placed::forget(bb.res as *mut c_void);
+    }
+}
+
+#[test]
+#[ignore = "needs a D3D12 device; run: cargo test -p d3d12_xs --lib hw_ -- --ignored --test-threads=1 (TOMBOX_HW_ADAPTER=warp for WARP)"]
+fn hw_execute_indirect_bundle_carries_executed_bundle_state_and_nothing_from_skipped_ones() {
+    let g = gpu();
+    unsafe {
+        let (rs, pso) = compute_pso(g.dev, COUNT_HLSL, None);
+        let (_, store) = compute_pso(g.dev, "#define RS \"RootConstants(num32BitConstants=1, b0), UAV(u0)\"\ncbuffer C : register(b0) { uint v; };\nRWByteAddressBuffer o : register(u0);\n[RootSignature(RS)]\n[numthreads(1, 1, 1)]\nvoid main() { o.Store(0, v); }\n", Some(rs));
+        let out = buffer(g.dev, HEAP_DEFAULT, 256, FLAG_UAV, ST_UAV);
+        let pout = buffer(g.dev, HEAP_DEFAULT, 256, FLAG_UAV, ST_UAV);
+        let rb = buffer(g.dev, HEAP_READBACK, 256, 0, ST_COPY_DEST);
+        let bb = buffer(g.dev, HEAP_UPLOAD, 256, 0, ST_GENERIC_READ);
+        core::ptr::write_bytes(bb.cpu, 0, 256);
+        crate::placed::register(bb.res as *mut c_void, crate::placed::Placed { va: bb.cpu as u64, desc: [0u8; 0x38], init_state: ST_GENERIC_READ });
+        let k = counting_bundle(g.dev, rs, pso, 3, out.va);
+        close_bundle_into(k, bb.cpu);
+        let l = title_list(g.dev);
+        let eib = |off: u64| call!(l, crate::cl_ext::CL_EXECUTE_INDIRECT_BUNDLE, (*mut c_void, u64, u32, *mut c_void, u32, u32) -> (), bb.res as *mut c_void, off, 16, core::ptr::null_mut::<c_void>(), 0, 0);
+        let grab = |dst: u64| {
+            raw_barrier(l, pout.res, ST_UAV, ST_COPY_SOURCE);
+            call!(l, X_COPY_BUFFER_REGION, (usize, u64, usize, u64, u64) -> (), rb.res, dst, pout.res, 0, 4);
+            raw_barrier(l, pout.res, ST_COPY_SOURCE, ST_UAV);
+            raw_barrier(l, out.res, ST_UAV, ST_COPY_SOURCE);
+            call!(l, X_COPY_BUFFER_REGION, (usize, u64, usize, u64, u64) -> (), rb.res, dst + 4, out.res, 12, 4);
+            raw_barrier(l, out.res, ST_COPY_SOURCE, ST_UAV);
+        };
+        call!(l, X_SET_COMPUTE_ROOT_SIGNATURE, (*mut c_void) -> (), rs);
+        call!(l, X_SET_PSO, (*mut c_void) -> (), store);
+        call!(l, X_SET_COMPUTE_ROOT_CONSTANT, (u32, u32, u32) -> (), 0, 7, 0);
+        call!(l, X_SET_COMPUTE_ROOT_UAV, (u32, u64) -> (), 1, pout.va);
+        eib(0x80);
+        call!(l, X_DISPATCH, (u32, u32, u32) -> (), 1, 1, 1);
+        grab(0);
+        call!(l, X_SET_COMPUTE_ROOT_CONSTANT, (u32, u32, u32) -> (), 0, 9, 0);
+        eib(0);
+        call!(l, X_DISPATCH, (u32, u32, u32) -> (), 1, 1, 1);
+        grab(8);
+        assert!(call!(l, X_CLOSE, () -> i32) >= 0);
+        let f = fence(g.dev);
+        submit(g.a, l, f, 1);
+        assert!(reached(f, 1, Duration::from_secs(5)));
+        let got = (rd(&rb, 0), rd(&rb, 4), rd(&rb, 8), rd(&rb, 12));
+        assert_eq!(got, (7, 0, 7, 2), "skipped bundle: the title state and no bundle work; executed bundle: its work, then the list draws with the PSO, root signature, constants and UAV the bundle set");
+        crate::placed::forget(bb.res as *mut c_void);
+    }
+}
+
+const IID_QUERY_HEAP: Guid = Guid { d1: 0x0d96_58ae, d2: 0xed45, d3: 0x469e, d4: [0xa6, 0x1d, 0x97, 0x0e, 0xc5, 0x83, 0xca, 0xb4] };
+const X_END_QUERY: usize = 29;
+const X_RESOLVE_QUERY_DATA: usize = 30;
+const CONSOLE_HZ: u64 = 99_750_000;
+
+unsafe fn title_clock(q: usize) -> (u64, u64) {
+    let (mut g, mut c) = (0u64, 0u64);
+    assert_eq!(call!(q, 17, (*mut u64, *mut u64) -> i32, &mut g, &mut c), 0);
+    (g, c)
+}
+
+unsafe fn timestamp_heap(dev: usize, n: u32) -> *mut c_void {
+    let desc: [u32; 3] = [1, n, 0];
+    let mut h: *mut c_void = core::ptr::null_mut();
+    assert!(call!(dev, 39, (*const u32, *const Guid, *mut *mut c_void) -> i32, desc.as_ptr(), &IID_QUERY_HEAP, &mut h) >= 0);
+    h
+}
+
+fn qpf() -> u64 {
+    let mut f = 0i64;
+    unsafe { QueryPerformanceFrequency(&mut f) };
+    f as u64
+}
+
+fn on_qpc_base(v: u64, qpc: u64, tol_ms: u64) -> bool {
+    let want = (qpc as u128 * CONSOLE_HZ as u128 / qpf() as u128) as i128;
+    (v as i128 - want).unsigned_abs() <= (CONSOLE_HZ / 1000 * tol_ms) as u128
+}
+
+#[test]
+#[ignore = "needs a D3D12 device; run: cargo test -p d3d12_xs --lib hw_ -- --ignored --test-threads=1 (TOMBOX_HW_ADAPTER=warp for WARP)"]
+fn hw_queue_timestamp_frequency_and_calibration_follow_the_console_99_75_mhz_clock() {
+    let g = gpu();
+    unsafe {
+        let mut f = 0u64;
+        assert_eq!(call!(g.a, 16, (*mut u64) -> i32, &mut f), 0);
+        assert_eq!(f, CONSOLE_HZ);
+        let host: crate::timestamp::FreqFn = core::mem::transmute(crate::present::real_queue_slot(16));
+        let mut hf = 0u64;
+        assert!(host(g.a as *mut c_void, &mut hf) >= 0 && hf != 0);
+        let (g0, c0) = title_clock(g.a);
+        assert!(on_qpc_base(g0, c0, 5), "{}: calibration gpu {g0} is not QPC {c0} on the 99.75 MHz base", if g.warp { "WARP" } else { "hardware" });
+        let h = xgs_kmd_emu::open();
+        let (mut ig, mut ic) = (0u64, 0u64);
+        let mut req = [0u8; 0x18];
+        req[8..16].copy_from_slice(&(&mut ig as *mut u64 as u64).to_le_bytes());
+        req[16..24].copy_from_slice(&(&mut ic as *mut u64 as u64).to_le_bytes());
+        let mut ret = 0u32;
+        assert!(xgs_kmd_emu::device_io_control(h, 0x7900_c213, req.as_ptr() as *const c_void, 0x18, core::ptr::null_mut(), 0, &mut ret));
+        xgs_kmd_emu::close(h);
+        std::thread::sleep(Duration::from_millis(200));
+        let (g1, c1) = title_clock(g.a);
+        assert!(g0 <= ig && ig <= g1 && c0 <= ic && ic <= c1, "IOCTL 0x7900c213 ({ig}, {ic}) not between slot 17 samples ({g0}, {c0}) and ({g1}, {c1})");
+        let dg = (g1 - g0) as f64 / CONSOLE_HZ as f64;
+        let dc = (c1 - c0) as f64 / qpf() as f64;
+        assert!((dg - dc).abs() < 0.002, "GPU clock advanced {dg} s while QPC advanced {dc} s");
+        let (mut tg, mut tc) = (0u64, 0u64);
+        assert_eq!(call!(g.b, 17, (*mut u64, *mut u64) -> i32, &mut tg, &mut tc), 0);
+        assert!(on_qpc_base(tg, tc, 5));
+    }
+}
+
+#[test]
+#[ignore = "needs a D3D12 device; run: cargo test -p d3d12_xs --lib hw_ -- --ignored --test-threads=1 (TOMBOX_HW_ADAPTER=warp for WARP)"]
+fn hw_end_query_timestamp_resolve_is_on_the_console_base_bracketed_by_calibration_and_keeps_predication() {
+    let g = gpu();
+    unsafe {
+        let heap = timestamp_heap(g.dev, 128);
+        let out = buffer(g.dev, HEAP_READBACK, 4096, 0, ST_COPY_DEST);
+        let pred = buffer(g.dev, HEAP_UPLOAD, 256, 0, ST_GENERIC_READ);
+        core::ptr::write_volatile(pred.cpu as *mut u64, 0);
+        let src = buffer(g.dev, HEAP_UPLOAD, 256, 0, ST_GENERIC_READ);
+        core::ptr::write_volatile(src.cpu as *mut u64, 0x5555_aaaa);
+        let before = crate::ts99::converted();
+        let l = title_list(g.dev);
+        for i in 0..100u32 {
+            call!(l, X_END_QUERY, (*mut c_void, u32, u32) -> (), heap, 2, i);
+        }
+        call!(l, X_PREDICATION, (*mut c_void, u64, u32) -> (), pred.res as *mut c_void, 0, 0);
+        call!(l, X_RESOLVE_QUERY_DATA, (*mut c_void, u32, u32, u32, *mut c_void, u64) -> (), heap, 2, 3, 90, out.res as *mut c_void, 16);
+        call!(l, X_COPY_BUFFER_REGION, (usize, u64, usize, u64, u64) -> (), out.res, 2048, src.res, 0, 8);
+        call!(l, X_PREDICATION, (*mut c_void, u64, u32) -> (), core::ptr::null_mut::<c_void>(), 0, 0);
+        call!(l, X_COPY_BUFFER_REGION, (usize, u64, usize, u64, u64) -> (), out.res, 2056, src.res, 0, 8);
+        assert!(call!(l, X_CLOSE, () -> i32) >= 0);
+        let f = fence(g.dev);
+        let (gb, _) = title_clock(g.a);
+        submit(g.a, l, f, 1);
+        assert!(reached(f, 1, Duration::from_secs(5)));
+        let (ga, _) = title_clock(g.a);
+        assert!(crate::ts99::converted() >= before + 90);
+        let q = |o: usize| core::ptr::read_volatile(out.cpu.add(o) as *const u64);
+        let who = if g.warp { "WARP" } else { "hardware" };
+        assert_eq!((q(0), q(8)), (0, 0), "resolve wrote before its destination offset");
+        let mut last = 0;
+        for i in 0..90 {
+            let v = q(16 + 8 * i);
+            assert!(v + 2 >= gb && v <= ga + 2, "{who}: timestamp {i} = {v} outside the GetClockCalibration bracket [{gb}, {ga}]");
+            assert!(v >= last, "{who}: timestamps not monotonic at {i}");
+            last = v;
+        }
+        assert_eq!(q(16 + 8 * 90), 0, "resolve wrote past its count");
+        assert_eq!(q(2048), 0, "the title predication was not restored after the conversion");
+        assert_eq!(q(2056), 0x5555_aaaa);
+    }
+}
+
+#[test]
+#[ignore = "needs a D3D12 device; run: cargo test -p d3d12_xs --lib hw_ -- --ignored --test-threads=1 (TOMBOX_HW_ADAPTER=warp for WARP)"]
+fn hw_gpu_timestamp_writes_are_on_the_console_base_and_advance_with_wall_time() {
+    let g = gpu();
+    unsafe {
+        let out = buffer(g.dev, HEAP_READBACK, 256, 0, ST_COPY_DEST);
+        let bop = |l: *mut c_void, va: u64| call!(l, crate::cl_ext::CL_WRITE64_BOTTOM_OF_PIPE, (u64, u64, u32, u32) -> (), va, 0, 0, crate::cl_ext::BOP_FLAG_GPU_TIMESTAMP);
+        let top = |l: *mut c_void, va: u64| call!(l, crate::console_slots::CL_WRITE64_TOP, (u64, u64, u32) -> (), va, 0, crate::console_slots::WRITE_TOP_FLAG_GPU_TIMESTAMP);
+        let l = title_list(g.dev);
+        top(l, out.va);
+        bop(l, out.va + 8);
+        assert!(call!(l, X_CLOSE, () -> i32) >= 0);
+        let l2 = title_list(g.dev);
+        bop(l2, out.va + 16);
+        top(l2, out.va + 24);
+        assert!(call!(l2, X_CLOSE, () -> i32) >= 0);
+        let f = fence(g.dev);
+        let (g0, c0) = title_clock(g.a);
+        submit(g.a, l, f, 1);
+        assert!(reached(f, 1, Duration::from_secs(5)));
+        let (g1, _) = title_clock(g.a);
+        std::thread::sleep(Duration::from_millis(200));
+        let (g2, _) = title_clock(g.a);
+        submit(g.a, l2, f, 2);
+        assert!(reached(f, 2, Duration::from_secs(5)));
+        let (g3, c3) = title_clock(g.a);
+        let q = |o: usize| core::ptr::read_volatile(out.cpu.add(o) as *const u64);
+        let v = [q(0), q(8), q(16), q(24)];
+        let who = if g.warp { "WARP" } else { "hardware" };
+        assert!(v[0] + 2 >= g0 && v[1] <= g1 + 2 && v[0] <= v[1], "{who}: list 1 {v:?} outside [{g0}, {g1}]");
+        assert!(v[2] + 2 >= g2 && v[3] <= g3 + 2 && v[2] <= v[3], "{who}: list 2 {v:?} outside [{g2}, {g3}]");
+        let secs = (v[2] - v[1]) as f64 / CONSOLE_HZ as f64;
+        let wall = (c3 - c0) as f64 / qpf() as f64;
+        assert!(secs >= 0.19 && secs <= wall + 0.002, "{who}: timestamps advanced {secs} s across a 200 ms sleep (wall {wall} s)");
+    }
+}
+
+#[test]
+#[ignore = "needs a D3D12 device; run: cargo test -p d3d12_xs --lib hw_ -- --ignored --test-threads=1 (TOMBOX_HW_ADAPTER=warp for WARP)"]
+fn hw_dma_list_timestamp_is_converted_after_the_copy_queue_submission() {
+    let g = gpu();
+    unsafe {
+        let desc: [u32; 4] = [3, 0, 0, 0];
+        let mut cq: *mut c_void = core::ptr::null_mut();
+        assert!(call!(g.dev, 8, (*const u32, *const Guid, *mut *mut c_void) -> i32, desc.as_ptr(), &IID_QUEUE, &mut cq) >= 0);
+        crate::present::apply_queue_vtable(cq);
+        let mut a: *mut c_void = core::ptr::null_mut();
+        assert!(call!(g.dev, 9, (u32, *const Guid, *mut *mut c_void) -> i32, 3, &IID_ALLOCATOR, &mut a) >= 0);
+        let mut rl: *mut c_void = core::ptr::null_mut();
+        assert!(call!(g.dev, 12, (u32, u32, *mut c_void, *mut c_void, *const Guid, *mut *mut c_void) -> i32, 0, 3, a, core::ptr::null_mut(), &IID_LIST, &mut rl) >= 0);
+        let l = crate::dma_list::wrap(rl);
+        let out = buffer(g.dev, HEAP_READBACK, 256, 0, ST_COPY_DEST);
+        call!(l, crate::dma_list::DMA_SLOT_TIMESTAMP, (u64, u32, u32, u32) -> (), out.va + 8, 0, 0, 0);
+        call!(l, crate::dma_list::DMA_SLOT_TIMESTAMP, (u64, u32, u32, u32) -> (), out.va + 16, 0, 0, 0);
+        assert!(call!(rl, 9, () -> i32) >= 0);
+        let f = fence(g.dev);
+        let (g0, _) = title_clock(g.a);
+        submit(cq as usize, l, f, 1);
+        assert!(reached(f, 1, Duration::from_secs(5)));
+        let (g1, _) = title_clock(g.a);
+        let q = |o: usize| core::ptr::read_volatile(out.cpu.add(o) as *const u64);
+        let who = if g.warp { "WARP" } else { "hardware" };
+        let (v0, v1) = (q(8), q(16));
+        assert!(v0 != 0, "{who}: DMA timestamp not written");
+        assert!(v0 + 2 >= g0 && v1 <= g1 + 2 && v0 <= v1, "{who}: DMA timestamps {v0} {v1} outside [{g0}, {g1}]");
+        assert_eq!((q(0), q(24)), (0, 0));
+        assert_eq!(crate::ts99::pending_of(&[rl]).len(), 2);
+        call!(l, 10, (*mut c_void, *mut c_void) -> i32, a, core::ptr::null_mut());
+        assert!(crate::ts99::pending_of(&[rl]).is_empty(), "Reset through the DMA list did not drop its pending timestamps");
+    }
+}
+
+#[path = "cl_fw_hw.rs"]
+mod cl_fw_hw;
+
+#[path = "device_place_hw.rs"]
+mod device_place_hw;

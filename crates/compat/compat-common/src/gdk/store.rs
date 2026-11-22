@@ -13,9 +13,13 @@ pub const IID: Guid = Guid::parse("de3dbdd4-0b37-4bdb-a10e-acf3a354d06a");
 pub const IID_V2: Guid = Guid::parse("2d42fea5-e71d-4b76-97cd-c50afbb3ae5d");
 pub const IID_V3: Guid = Guid::parse("60b09f4e-1b85-45b1-826c-169118e230e1");
 
-pub const E_GAMESTORE_LICENSE_NOT_FOUND: i32 = 0x803F_6107u32 as i32;
-pub const E_GAMESTORE_ALREADY_PURCHASED: i32 = 0x803F_6108u32 as i32;
-pub const E_GAMESTORE_NOT_FOUND: i32 = 0x803F_6101u32 as i32;
+pub const E_GAMESTORE_LICENSE_ACTION_NOT_APPLICABLE_TO_PRODUCT: i32 = 0x8924_5300u32 as i32;
+pub const E_GAMESTORE_NETWORK_ERROR: i32 = 0x8924_5301u32 as i32;
+pub const E_GAMESTORE_SERVER_ERROR: i32 = 0x8924_5302u32 as i32;
+pub const E_GAMESTORE_INSUFFICIENT_QUANTITY: i32 = 0x8924_5303u32 as i32;
+pub const E_GAMESTORE_ALREADY_PURCHASED: i32 = 0x8924_5304u32 as i32;
+pub const E_GAMESTORE_LICENSE_ACTION_THROTTLED: i32 = 0x8924_5305u32 as i32;
+pub const E_NOT_FOUND: i32 = 0x8007_0490u32 as i32;
 
 static CONTEXT_ANCHOR: u64 = 0x5853_544F_5245_4354;
 
@@ -144,7 +148,7 @@ fn consume(id: &str, quantity: u32) -> Result<u32, i32> {
     let mut s = load_state();
     let cur = s["balances"][id].as_u64().unwrap_or(0) as u32;
     if cur < quantity {
-        return Err(E_INVALIDARG);
+        return Err(E_GAMESTORE_INSUFFICIENT_QUANTITY);
     }
     s["balances"][id] = json!(cur - quantity);
     let hr = save_state(&s);
@@ -345,7 +349,7 @@ unsafe extern "system" fn purchase_ui_async(_t: This, _ctx: usize, id: *const u8
     xasync::run_with(block, OP_UI, Box::new(move |c| {
         let Some(p) = find(&id) else {
             super::win::show(Dialog { title: "Microsoft Store".into(), text: format!("This item isn't available.\n\n{id}"), buttons: vec!["OK".into()], cancel: Some(0), ..Default::default() }, Some(c.window.clone()));
-            return Payload::status(E_GAMESTORE_NOT_FOUND);
+            return Payload::status(E_NOT_FOUND);
         };
         if !p.consumable && owns(&p.store_id) {
             super::win::show(Dialog { title: "Microsoft Store".into(), text: format!("You already own {}.", p.title), buttons: vec!["OK".into()], cancel: Some(0), ..Default::default() }, Some(c.window.clone()));
@@ -391,7 +395,7 @@ unsafe extern "system" fn redeem_ui_async(_t: This, _ctx: usize, token: *const u
             Some(id) if allowed.is_empty() || allowed.iter().any(|a| a.eq_ignore_ascii_case(id)) => Payload::status(grant(id, 1)),
             _ => {
                 super::win::show(Dialog { title: "Redeem a code".into(), text: "This code isn't valid.".into(), buttons: vec!["OK".into()], cancel: Some(0), ..Default::default() }, Some(c.window.clone()));
-                Payload::status(E_GAMESTORE_NOT_FOUND)
+                Payload::status(E_NOT_FOUND)
             }
         }
     }))
@@ -482,7 +486,7 @@ unsafe extern "system" fn updates_result(_t: This, block: *mut c_void, count: u3
 
 unsafe extern "system" fn download_updates_async(_t: This, _ctx: usize, ids: *const *const u8, n: usize, block: *mut c_void) -> i32 {
     let want = str_list(ids, n);
-    let hr = if want.iter().all(|w| *w == super::package::package_id()) { S_OK } else { E_GAMESTORE_NOT_FOUND };
+    let hr = if want.iter().all(|w| *w == super::package::package_id()) { S_OK } else { E_NOT_FOUND };
     xasync::run(block, OP_UI, Payload::status(hr))
 }
 
@@ -491,7 +495,7 @@ unsafe extern "system" fn install_packages_async(_t: This, _ctx: usize, ids: *co
     let mut b = Vec::new();
     for w in &want {
         if !owns(w) {
-            return xasync::run(block, OP_PACKAGES, Payload::status(E_GAMESTORE_LICENSE_NOT_FOUND));
+            return xasync::run(block, OP_PACKAGES, Payload::status(E_GAMESTORE_LICENSE_ACTION_NOT_APPLICABLE_TO_PRODUCT));
         }
         let pid = if w.eq_ignore_ascii_case(&game_store_id()) { super::package::package_id() } else { w.clone() };
         let mut e = [0u8; 33];
@@ -528,7 +532,7 @@ unsafe extern "system" fn install_packages_result(_t: This, block: *mut c_void, 
 
 unsafe extern "system" fn package_identifier(_t: This, id: *const u8, size: usize, buf: *mut u8) -> i32 {
     let Some(id) = cstr(id) else { return E_INVALIDARG };
-    let pid = if id.eq_ignore_ascii_case(&game_store_id()) { super::package::package_id() } else if owns(&id) { id } else { return E_GAMESTORE_NOT_FOUND };
+    let pid = if id.eq_ignore_ascii_case(&game_store_id()) { super::package::package_id() } else if owns(&id) { id } else { return E_NOT_FOUND };
     if buf.is_null() || size < pid.len() + 1 {
         return E_NOT_SUFFICIENT_BUFFER;
     }
@@ -549,14 +553,14 @@ unsafe extern "system" fn acquire_package_license_async(_t: This, _ctx: usize, p
     let p = if pkg == super::package::package_id() || owns(&pkg) {
         Payload::value(Box::into_raw(Box::new(License { magic: LMAGIC, id: pkg })) as usize)
     } else {
-        Payload::status(E_GAMESTORE_LICENSE_NOT_FOUND)
+        Payload::status(E_GAMESTORE_LICENSE_ACTION_NOT_APPLICABLE_TO_PRODUCT)
     };
     xasync::run(block, OP_LICENSE, p)
 }
 
 unsafe extern "system" fn acquire_durables_license_async(_t: This, _ctx: usize, id: *const u8, block: *mut c_void) -> i32 {
     let Some(id) = cstr(id) else { return E_INVALIDARG };
-    let p = if owns(&id) { Payload::value(Box::into_raw(Box::new(License { magic: LMAGIC, id })) as usize) } else { Payload::status(E_GAMESTORE_LICENSE_NOT_FOUND) };
+    let p = if owns(&id) { Payload::value(Box::into_raw(Box::new(License { magic: LMAGIC, id })) as usize) } else { Payload::status(E_GAMESTORE_LICENSE_ACTION_NOT_APPLICABLE_TO_PRODUCT) };
     xasync::run(block, OP_LICENSE, p)
 }
 

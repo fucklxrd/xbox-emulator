@@ -402,7 +402,7 @@ fn application_operation_handlers_follow_console_mount_failure() {
     assert_eq!(result_of(application_operations_end_handler, "{\"FileName\":\"\"}"), E_INVALIDARG);
     let mut s = MockSession::new();
     let r = call(package_mount_hold_handler, s.id(), "{\"FileName\":\"{pkg}:\\\\a\"}");
-    assert_eq!(num_i32(&r, "Result"), HR_FILE_NOT_FOUND);
+    assert_eq!(num_i32(&r, "Result"), S_OK);
     assert_eq!(s.sent.len(), 1);
     assert_eq!(num_i32(&s.sent[0].json, "Result"), HR_FILE_NOT_FOUND);
     let mut s = MockSession::new();

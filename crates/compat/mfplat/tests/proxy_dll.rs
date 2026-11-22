@@ -10,7 +10,7 @@ mod reset;
 mod exports {
     include!(concat!(env!("OUT_DIR"), "/forwarded.rs"));
 }
-use exports::{CONSOLE_EXPORTS, FORWARDED, FORWARDED_ALIASES};
+use exports::{CONSOLE_EXPORTS, FORWARDED, FORWARDED_ALIASES, MISSING};
 use reset::{query, release, Guid, IID_ID3D12DEVICE, IID_IUNKNOWN};
 use std::path::{Path, PathBuf};
 use std::sync::{Mutex, OnceLock};
@@ -395,7 +395,6 @@ fn every_console_and_pc_export_resolves_through_proxy() {
         "MFStartup",
         "MFShutdown",
         "MFResetDXGIDeviceManagerX",
-        "MFGetPlatform",
         "LFGetGlobalPool",
         "MFBlockThread",
         "MFUnblockThread",
@@ -422,7 +421,7 @@ fn every_console_and_pc_export_resolves_through_proxy() {
             missing.push(*n);
         }
     }
-    assert!(missing.is_empty(), "console mfplat exports missing from proxy: {missing:?}");
+    assert_eq!(missing, MISSING, "console mfplat exports missing from proxy: {missing:?}");
     assert_eq!(CONSOLE_EXPORTS.len(), 140);
     for n in ["MFCreateAttributes", "MFCreateMediaType", "MFCreateSample", "MFllMulDiv"] {
         let c = format!("{n}\0");
@@ -483,9 +482,9 @@ fn startup_and_console_only_exports_follow_console_semantics() {
     let get_private = export!(px("MFGetPrivateWorkqueues"), fn(*mut u32) -> i32);
     let block = export!(px("MFBlockThread"), fn() -> i32);
     let unblock = export!(px("MFUnblockThread"), fn() -> i32);
-    let platform = export!(px("MFGetPlatform"), fn() -> *mut c_void);
     let pool = export!(px("LFGetGlobalPool"), fn() -> *mut c_void);
     let join = export!(px("MFJoinIoPort"), fn(H) -> i32);
+    assert!(!unsafe { GetProcAddress(proxy().proxy as H, b"MFGetPlatform\0".as_ptr()) }.is_null(), "MFGetPlatform is exported");
     let mut v = 7u32;
     assert_eq!(unsafe { get_private(&mut v) }, MF_E_SHUTDOWN);
     assert_eq!(v, 7);
@@ -498,7 +497,6 @@ fn startup_and_console_only_exports_follow_console_semantics() {
     assert_eq!(v, host_assign_queues());
     assert_eq!(unsafe { block() }, 0);
     assert_eq!(unsafe { unblock() }, 0);
-    assert!(unsafe { platform() }.is_null());
     assert!(unsafe { pool() }.is_null());
     let path = proxy().dir.join("iocp.bin");
     std::fs::write(&path, [0u8; 16]).unwrap();

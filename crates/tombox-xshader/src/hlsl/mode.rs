@@ -3,8 +3,8 @@ use crate::rdna2::{Enc, Insn, Opnd};
 use std::collections::BTreeSet;
 
 pub(super) const MAD_HELPERS: &str = r#"float tb_ftz(float x) { return ((asuint(x) & 0x7f800000u) == 0u) ? asfloat(asuint(x) & 0x80000000u) : x; }
-float tb_madz(float a, float b, float c) { precise float p = tb_ftz(tb_ftz(a) * tb_ftz(b)); precise float s = p + tb_ftz(c); return tb_ftz(s); }
-float tb_madlz(float a, float b, float c) { float x = tb_ftz(a), y = tb_ftz(b); precise float p = tb_ftz((x == 0.0 || y == 0.0) ? 0.0 : x * y); precise float s = p + tb_ftz(c); return tb_ftz(s); }
+float tb_madz(float a, float b, float c) { precise float p = tb_ftz(tb_ftz(a) * tb_ftz(b)); precise float s = p + tb_ftz(c); return tb_qn(tb_ftz(s)); }
+float tb_madlz(float a, float b, float c) { float x = tb_ftz(a), y = tb_ftz(b); precise float p = tb_ftz((x == 0.0 || y == 0.0) ? 0.0 : x * y); precise float s = p + tb_ftz(c); return tb_qn(tb_ftz(s)); }
 float tb_hz(float x) { return (abs(x) < 6.103515625e-05) ? asfloat(asuint(x) & 0x80000000u) : x; }
 uint tb_hzb(uint b) { return ((b & 0x7c00u) == 0u) ? (b & 0x8000u) : b; }
 "#;
@@ -28,7 +28,7 @@ float tb_m_mul(float a, float b, uint m) { precise double p = (double)a * (doubl
 float tb_m_mull(float a, float b, uint m) { return (a == 0.0 || b == 0.0) ? 0.0 : tb_m_mul(a, b, m); }
 float tb_m_fma(float a, float b, float c, uint m) { precise double p = (double)a * (double)b; precise float r = tb_fma(a, b, c); precise double e = tb_res2(p, (double)c, r); float q = tb_rfix(r, e, m); if ((m & 3u) == 2u && asuint(q) == 0u && !(abs(e) > 0.0) && !(p == 0.0 && ((asuint(a) ^ asuint(b)) >> 31) == 0u && asuint(c) == 0u)) q = asfloat(0x80000000u); return q; }
 float tb_m_cvti(int x, uint m) { precise float r = (float)x; double e = (r >= 2147483648.0) ? -1.0 : (((int)r < x) ? 1.0 : (((int)r > x) ? -1.0 : 0.0)); return tb_rfix(r, e, m); }
-float tb_m_cvtu(uint x, uint m) { precise float r = (float)x; double e = (r >= 4294967296.0) ? -1.0 : (((uint)r < x) ? 1.0 : (((uint)r > x) ? -1.0 : 0.0)); return tb_rfix(r, e, m); }
+float tb_m_cvtu(uint x, uint m) { precise float r = tb_u2f(x); double e = (r >= 4294967296.0) ? -1.0 : (((uint)r < x) ? 1.0 : (((uint)r > x) ? -1.0 : 0.0)); return tb_rfix(r, e, m); }
 float tb_m_cvtd(double x, uint m) { precise float r = (float)x; precise double e = x - (double)r; return tb_rfix(r, e, m); }
 double tb_p2(int n) { return asdouble(0u, (uint)(clamp(n, -1000, 1000) + 1023) << 20); }
 float tb_m_ldexp(float a, int n, uint m) { int k = clamp(n, -300, 300); precise double x = (double)a * tb_p2(k >> 1) * tb_p2(k - (k >> 1)); precise float r = (float)x; precise double e = x - (double)r; return tb_rfix(r, e, m); }

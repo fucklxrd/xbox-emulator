@@ -1,4 +1,4 @@
-use super::{r, Emitter};
+use super::{mesh, r, Emitter};
 use crate::gds_abi::{TB_GDS_HLSL_DECL, TB_GDS_TITLE_DWORDS};
 use crate::rdna2::Insn;
 
@@ -26,21 +26,30 @@ impl Emitter<'_> {
         let d = ins.dst.first().copied();
         let (a, v0, v1) = (ins.src[0], ins.src[1], ins.src[2]);
         let counter = matches!(m.as_str(), "ds_append" | "ds_consume");
-        let addr = if counter {
-            format!("((m0 & 0xffffu) + {off:#x}u)")
+        if counter && mesh::wave_size(&self.insns) == 64 {
+            return Err(format!("{m}: a wave64 shader spans two host waves, so count_bits(exec) and the shared pre-op value cannot be formed in one host wave"));
+        }
+        let rel = if counter {
+            format!("{off:#x}u")
         } else {
             self.touch(&a);
-            format!("((m0 & 0xffffu) + ({}) + {off:#x}u)", r(&a)?)
+            format!("({}) + {off:#x}u", r(&a)?)
         };
-        self.line(&format!("uint t{t}a = {addr} & ~3u; bool t{t}k = (exec_lo & 1u) != 0u && t{t}a < {limit}u; uint t{t} = 0u;"));
+        self.line(&format!(
+            "uint t{t}r = {rel}; uint t{t}a = ((m0 >> 16) + t{t}r) & ~3u; bool t{t}k = (exec_lo & 1u) != 0u && t{t}r < (m0 & 0xffffu) && t{t}a < {limit}u; uint t{t} = 0u;"
+        ));
         let rtn = m.contains("_rtn") || counter || m == "ds_read_b32";
         let op = m.replace("_rtn", "");
         self.touch(&v0);
         self.touch(&v1);
         let (x0, x1) = (r(&v0)?, r(&v1)?);
         let body = match op.as_str() {
-            "ds_append" => format!("tb_gds.InterlockedAdd(t{t}a, 1u, t{t});"),
-            "ds_consume" => format!("tb_gds.InterlockedAdd(t{t}a, 0xffffffffu, t{t});"),
+            "ds_append" | "ds_consume" => {
+                self.uses_wave = true;
+                let n = if op == "ds_append" { format!("t{t}n") } else { format!("0u - t{t}n") };
+                self.line(&format!("uint4 t{t}b = WaveActiveBallot((exec_lo & 1u) != 0u); uint t{t}n = countbits(t{t}b.x) + countbits(t{t}b.y) + countbits(t{t}b.z) + countbits(t{t}b.w); uint t{t}l = (t{t}b.x != 0u) ? firstbitlow(t{t}b.x) : ((t{t}b.y != 0u) ? 32u + firstbitlow(t{t}b.y) : ((t{t}b.z != 0u) ? 64u + firstbitlow(t{t}b.z) : 96u + firstbitlow(t{t}b.w)));"));
+                format!("if (WaveGetLaneIndex() == t{t}l) {{ tb_gds.InterlockedAdd(t{t}a, {n}, t{t}); }}")
+            }
             "ds_read_b32" => format!("t{t} = tb_gds.Load(t{t}a);"),
             "ds_write_b32" => format!("tb_gds.Store(t{t}a, {x0});"),
             "ds_add_u32" => format!("tb_gds.InterlockedAdd(t{t}a, {x0}, t{t});"),
@@ -71,6 +80,9 @@ impl Emitter<'_> {
             other => return Err(format!("{other} with GDS=1 is not lowered")),
         };
         self.line(&format!("if (t{t}k) {{ {body} }}"));
+        if counter {
+            self.line(&format!("t{t} = WaveReadLaneAt(t{t}, t{t}l);"));
+        }
         if rtn {
             let d = d.ok_or("gds: no vdst")?;
             self.wv(&d, &format!("t{t}"))?;

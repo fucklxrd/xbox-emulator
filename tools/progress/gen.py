@@ -5,15 +5,46 @@ here = os.path.dirname(os.path.abspath(__file__))
 root = os.path.normpath(os.path.join(here, "..", ".."))
 dat = os.path.join(here, "data")
 img = os.path.join(root, "docs", "img")
-cfg = json.load(open(os.path.join(here, "progress.json"), encoding="utf-8"))
-_emu = {k.lower(): dict(v) for k, v in cfg["emulator"].items()}
-if os.path.isfile(os.path.join(dat, "emulator_exports.json")):
-    for _dll, _v in json.load(open(os.path.join(dat, "emulator_exports.json"), encoding="utf-8")).items():
-        _e = _emu.setdefault(_dll.lower(), {})
-        _e["file"] = _v["file"]
-        _e["functions"] = {f: s for f, s in _v["functions"].items() if s != "missing"}
-        _e["notes"] = {**_e.get("notes", {}), **_v["notes"]}
+CONFIG = sys.argv[sys.argv.index("--config") + 1] if "--config" in sys.argv else os.path.join(here, "progress.json")
+cfg = json.load(open(CONFIG, encoding="utf-8"))
+_emu = {k.lower(): {**v, "functions": dict(v.get("functions", {})), "notes": dict(v.get("notes", {}))} for k, v in cfg["emulator"].items()}
+_xp = json.load(open(os.path.join(dat, "emulator_exports.json"), encoding="utf-8")) if os.path.isfile(os.path.join(dat, "emulator_exports.json")) else {}
+_xpl = {k.lower() for k in _xp}
+if os.path.isfile(os.path.join(dat, "emulator_cfg_checks.json")):
+    for _dll, _c in json.load(open(os.path.join(dat, "emulator_cfg_checks.json"), encoding="utf-8")).items():
+        _e = _emu.get(_dll.lower())
+        if _e is None or _dll.lower() in _xpl:
+            continue
+        for _f in _c.get("not_in_built_dll", []):
+            _e["functions"].pop(_f, None)
+            _e["notes"][_f] = f"not exported by the built {_c['built_dll']}" + (f"; {_e['notes'][_f]}" if _e["notes"].get(_f) else "")
+for _dll, _v in _xp.items():
+    _e = _emu.setdefault(_dll.lower(), {})
+    _e["file"] = _v["file"]
+    _e["functions"] = {f: s for f, s in _v["functions"].items() if s != "missing"}
+    _e["notes"] = {**_e.get("notes", {}), **_v["notes"]}
+    if _v.get("builds"):
+        _e["builds"] = {b: {"table": t["table"], "functions": {f: s for f, s in t["functions"].items() if s != "missing"}, "notes": t["notes"]}
+                        for b, t in _v["builds"].items()}
+        _e["known_builds"] = _v["known_builds"]
 cfg["emulator"] = _emu
+
+
+def variant(e, build):
+    vs = sorted(int(b) for b in e.get("builds", {}))
+    kb = e.get("known_builds", vs)
+    if build is None:
+        return None
+    for i, b in enumerate(vs):
+        upper = next((k for k in kb if k > b), b + 1)
+        if build < upper and (build >= b or i == 0):
+            return str(b)
+    return None
+
+
+def emu_table(e, build):
+    v = variant(e, build)
+    return e["builds"][v] if v else e
 EVIDENCE_OVERRIDE = None
 
 
@@ -52,19 +83,28 @@ IMPORT_EVIDENCE = ["media.json", "gameinput_ext.json", "chatprobe.json"]
 GREEN, AMBER, GREY, BG = "#2ea043", "#d29922", "#6e7681", "#0d1117"
 COL = {"done": GREEN, "partial": AMBER, "none": GREY}
 XCOL = {"implemented": "#2ea043", "forwarded": "#388bfd", "hooked": "#a371f7", "pc": "#2f8f83",
-        "title": "#56b6c2", "stub": "#d29922", "unverified": "#3d444d", "missing": "#6e7681"}
-XORDER = ["implemented", "forwarded", "hooked", "pc", "title", "stub", "unverified", "missing"]
+        "title": "#56b6c2", "pending": "#e3b341", "stub": "#d29922", "unverified": "#3d444d", "missing": "#6e7681"}
+XORDER = ["implemented", "forwarded", "hooked", "pc", "title", "pending", "stub", "unverified", "missing"]
 COVERED = {"implemented", "forwarded", "hooked", "pc", "title"}
 PC_SUPPLEMENT = {"kernel32.dll", "advapi32.dll", "ntdll.dll", "kernelbase.dll", "shcore.dll", "ole32.dll"}
 LABEL = {"implemented": "implemented in emulator", "forwarded": "forwarded by emulator to PC",
          "hooked": "PC system DLL, hooked by emulator", "pc": "PC system DLL (name match)",
-         "title": "shipped with the title", "stub": "emulator stub", "unverified": "unverified",
+         "title": "shipped with the title", "pending": "implemented, awaiting verification", "stub": "emulator stub", "unverified": "unverified",
          "missing": "missing"}
 TOMBOX = "https://github.com/drycheetah84/TomBox/blob/master/"
 
 
 def jload(name):
     return json.load(open(os.path.join(dat, name), encoding="utf-8"))
+
+
+_CACHE = {}
+
+
+def cached(key):
+    if key not in _CACHE:
+        _CACHE[key] = {k: v.get("build") for k, v in jload("title_imports.json").items()} if key == "builds" else jload("console_exports.json")
+    return _CACHE[key]
 
 
 def ranges(s):
@@ -111,6 +151,7 @@ def instructions():
         n, u, ok = line.split()
         used[n] = (int(u), int(ok))
     verified = set(cfg.get("rdna2_verified", {}).get("mnemonics", []))
+    pending = set(cfg.get("rdna2_pending", {}).get("mnemonics", [])) - verified
     groups, seen = {}, set()
     for g, names in jload("mnem_groups.json"):
         for n in names:
@@ -118,6 +159,9 @@ def instructions():
             u, ok = used.get(n, (0, 0))
             if n in verified and u == ok:
                 groups.setdefault(g, []).append("done")
+                continue
+            if n in pending:
+                groups.setdefault(g, []).append("partial")
                 continue
             groups.setdefault(g, []).append("done" if u and u == ok else "partial" if u else "none")
     for n, (u, ok) in used.items():
@@ -201,12 +245,27 @@ def title_import_index():
         for mods in t["binaries"].values():
             for m in mods:
                 low = m["module"].lower()
-                for f in m["functions"]:
-                    if low.startswith(("api-ms-", "ext-ms-")):
+                hosts = m.get("hosts") or [None] * len(m["functions"])
+                names = m.get("names") or [None] * len(m["functions"])
+                for f, h, nm in zip(m["functions"], hosts, names):
+                    if h:
+                        direct.setdefault((h, f), set()).add(title)
+                    elif low.startswith(("api-ms-", "ext-ms-")):
                         by_func.setdefault(f, set()).add(title)
                     else:
                         direct.setdefault((low, f), set()).add(title)
+                        if nm:
+                            direct.setdefault((low, nm), set()).add(title)
+        for libs in t.get("dynamic", {}).values():
+            for lib, fs in libs.items():
+                for f in fs:
+                    direct.setdefault((lib.lower(), f), set()).add(title)
     return ti, direct, by_func
+
+
+def emu_row_status(e, n, pres, builds):
+    tabs = [emu_table(e, builds.get(t)) for t in pres] or [e]
+    return max((t["functions"].get(n, "missing") for t in tabs), key=XORDER.index)
 
 
 HOST_PRIORITY = ["kernelbase.dll", "ucrtbase.dll", "ntdll.dll", "combase.dll", "msvcp_win.dll", "rpcrt4.dll",
@@ -216,6 +275,7 @@ HOST_PRIORITY = ["kernelbase.dll", "ucrtbase.dll", "ntdll.dll", "combase.dll", "
 def console(full=False, twins=True):
     con = jload("console_exports.json")
     ti, direct, by_func = title_import_index()
+    builds = {k: v.get("build") for k, v in ti.items()}
     emu = {k.lower(): v for k, v in cfg["emulator"].items()}
     hooked = {k: set(v) for k, v in cfg["hooked"].items() if k != "file"}
     oshook, oshook_file = oshost_hooks()
@@ -225,6 +285,7 @@ def console(full=False, twins=True):
             if fwd is None and n in by_func and n not in host:
                 host[n] = lib.lower()
     libs = {}
+    cpend = {k.lower(): set(v) for k, v in cfg.get("console_pending", {}).items()}
     for lib, v in con.items():
         low = lib.lower()
         rows, notes = [], {}
@@ -236,8 +297,8 @@ def console(full=False, twins=True):
             users = set(direct.get((low, n), set()))
             if host.get(n) == low:
                 users |= by_func.get(n, set())
-            if low in emu and (has == 0 or n in emu[low]["functions"] or low not in PC_SUPPLEMENT):
-                st = emu[low]["functions"].get(n, "missing")
+            if low in emu and (has == 0 or any(n in t["functions"] for t in [emu[low], *emu[low].get("builds", {}).values()]) or low not in PC_SUPPLEMENT):
+                st = emu_row_status(emu[low], n, pres, builds)
             elif has == 1:
                 st = "hooked" if n in hooked.get(low, ()) else "pc"
             elif has == 2:
@@ -249,6 +310,8 @@ def console(full=False, twins=True):
                             else f"name match on the PC twin {tw}; the console {lib} is not emulated, the title's API-set import resolves to the PC DLL")
             else:
                 st = "missing"
+            if n in cpend.get(low, ()) and st in COVERED:
+                st = "pending"
             rows.append((n, st, frozenset(users), tuple(pres)))
         if not rows:
             continue
@@ -359,18 +422,36 @@ def ordinal_evidence(mod, f):
     return cfg.get("ordinal_evidence", {}).get(mod, {}).get(f)
 
 
-def classify_title_import(title, shipped, binary, mod, f, pcflag):
+def classify_title_import(title, shipped, binary, mod, f, pcflag, name=None, host=None):
     tc = tcfg(title)
-    low = mod.lower()
+    low = host or mod.lower()
+    fn = name or f
+    via = f"{mod} -> console host {host}; " if host else (f"{mod} ordinal {f} = {name} on this title's console {mod}; " if name else "")
     emu = {k.lower(): v for k, v in cfg["emulator"].items()}
     hooked = {k: set(v) for k, v in cfg["hooked"].items() if k != "file"}
     ub, um = unverified_lists(title)
     if binary.lower() in ub:
         return "unverified", f"{binary} is delay-loaded by the EXE and never appears in run logs"
-    if low in emu and (f in emu[low]["functions"] or low not in PC_SUPPLEMENT):
-        st = emu[low]["functions"].get(f, "missing")
-        note = (emu[low].get("notes", {}).get(f) or cfg["notes"].get(f, "")) if st != "missing" else f"not exported by the emulator's {mod}"
-        return st, f"[{emu[low]['file']}]({TOMBOX}{emu[low]['file']})" + (f" ({note})" if note else "")
+    if low in shipped and low in emu and low not in {k.lower() for k in tc.get("emulator_replaces", {})}:
+        ef = emu[low]
+        return "title", f"shipped with the title ({mod}); the emulator's [{ef['file']}]({TOMBOX}{ef['file']}) also exports it ({ef['functions'].get(fn, 'missing')}) but is not staged for {title}"
+    if low in emu and (fn in emu[low]["functions"] or low not in PC_SUPPLEMENT):
+        tab = emu_table(emu[low], cached("builds").get(title))
+        st = tab["functions"].get(fn, "missing")
+        note = (tab.get("notes", {}).get(fn) or cfg["notes"].get(fn, "")) if st != "missing" else f"not exported by the emulator's {host or mod}"
+        if low in shipped:
+            note = {k.lower(): v for k, v in tc.get("emulator_replaces", {}).items()}.get(low, "") + "; " + note
+        src = tab.get("table") or emu[low]["file"]
+        return st, via + f"[{src}]({TOMBOX}{src})" + (f" ({note})" if note else "")
+    if host:
+        cl = next((v for k, v in cached("console").items() if k.lower() == host), {})
+        oshook, oshook_file = oshost_hooks()
+        if fn in cl.get("twin_has", ()):
+            tw = " / ".join(cl.get("pc_twin", ()))
+            if fn in oshook.get(host, ()) or any(fn in oshook.get(t, ()) for t in cl.get("pc_twin", ())):
+                return "hooked", via + f"PC twin {tw} exports {fn}; hooked by the emulator OS host ({oshook_file})"
+            return "pc", via + f"name match on the PC twin {tw}; the console {host} is not emulated"
+        return "missing", via + f"no emulator crate for {host} and no PC twin export named {fn}"
     if low in um:
         return "unverified", "delay-loaded; no load seen in run logs"
     if low in shipped:
@@ -394,7 +475,9 @@ def title_rows(title, t, full=False):
     for binary in sorted(t["binaries"], key=lambda b: (not b.lower().endswith(".exe"), "/" in b, b.lower())):
         for m in t["binaries"][binary]:
             console_mod = m["module"].lower() not in shipped
-            rows = [(f, *classify_title_import(title, shipped, binary, m["module"], f, pf)) for f, pf in zip(m["functions"], m["pc"])
+            n = len(m["functions"])
+            rows = [(f, *classify_title_import(title, shipped, binary, m["module"], f, pf, nm, h))
+                    for f, pf, nm, h in zip(m["functions"], m["pc"], m.get("names") or [None] * n, m.get("hosts") or [None] * n)
                     if full or (console_mod and pf == 0)]
             if rows:
                 out.append((binary, m, rows))
@@ -420,11 +503,11 @@ def library_map(summary, libs):
     w("# Library map")
     w("")
     w(f"Generated by `tools/progress/gen.py` from `tools/progress/data/` (refresh with `tools/progress/sync.py`). Upstream: TomBox `{cfg['upstream']['commit']}`; emulator source paths link to upstream. Titles analysed: "
-      + ", ".join(f"{k} (console OS {v['os_build']})" for k, v in ti.items()) + ".")
+      + ", ".join(f"{k} (console OS {v['os_build']})" if v["os_build"] else f"{k} (no console OS dump; build {v.get('build')} assumed from {v.get('os_build_hint')})" for k, v in ti.items()) + ".")
     w("")
     w("## Scope: Xbox console libraries only")
     w("")
-    w("The map counts only what the console provides and a PC does not. A console export is console-related when this PC's `C:\\Windows\\System32` has no DLL of the same name, or has one that does not export that name (for an export by ordinal only: that ordinal). A console DLL that is a modified PC DLL (kernel32, advapi32, mfplat, wldp, ...) therefore counts only for the exports the PC DLL lacks; console DLLs whose every export exists in the PC DLL of the same name (ntdll, msvcrt, ucrtbase, combase, xgameruntime, GameInput, ...) are left out. Title imports are counted the same way: imports that a PC System32 DLL or PC API set provides, and imports from DLLs shipped with the title, are excluded from both done and total. Absence from System32 is the only test, so a few non-Xbox components that happen not to ship with desktop Windows (symsrv, ConIoSrv, KernelTraceControl, the Media Foundation H.264/HEVC decoder DLLs) are counted. Four console host DLLs have no same-named PC DLL but a differently named PC twin (minuserx -> user32, kernel32legacy -> kernel32 / kernelbase, advapi32legacy -> advapi32, minappmodelx -> twinapi.appcore / kernel.appcore); they stay counted in full, and while one is not emulated only its title-imported exports that the twin exports by name are marked `pc` (or `hooked`), so the denominator does not change. kernel32legacy is not treated as a twin: it is emulated by its own compat DLL (crates/compat/kernel32legacy, console ordinals, kernel32-legacy API-set imports routed to it), and every row takes its status from that crate's exports.txt.")
+    w("The map counts only what the console provides and a PC does not. A console export is console-related when this PC's `C:\\Windows\\System32` has no DLL of the same name, or has one that does not export that name (for an export by ordinal only: that ordinal). A console DLL that is a modified PC DLL (kernel32, advapi32, mfplat, wldp, ...) therefore counts only for the exports the PC DLL lacks; console DLLs whose every export exists in the PC DLL of the same name (ntdll, msvcrt, ucrtbase, combase, xgameruntime, GameInput, ...) are left out. Title imports are counted the same way: imports that a PC System32 DLL or PC API set provides, and imports from DLLs shipped with the title, are excluded from both done and total. Absence from System32 is the only test, so a few non-Xbox components that happen not to ship with desktop Windows (symsrv, ConIoSrv, KernelTraceControl, the Media Foundation H.264/HEVC decoder DLLs) are counted. Four console host DLLs have no same-named PC DLL but a differently named PC twin (minuserx -> user32, kernel32legacy -> kernel32 / kernelbase, advapi32legacy -> advapi32, minappmodelx -> twinapi.appcore / kernel.appcore); they stay counted in full, and while one is not emulated only its title-imported exports that the twin exports by name are marked `pc` (or `hooked`), so the denominator does not change. kernel32legacy is not treated as a twin: it is emulated by its own compat DLL (crates/compat/kernel32legacy, console ordinals, kernel32-legacy API-set imports routed to it), and every row takes its status from that crate's exports.txt (exports_19041.txt for a title on console OS 19041). Title imports whose console API-set host is one of these four DLLs are counted against that host, not as PC imports.")
     w("")
     w("## Statuses")
     w("")
@@ -511,11 +594,14 @@ def library_map(summary, libs):
             w("")
             w("</details>")
             w("")
-        if len(ti) > 1:
+        if len(ti) > 1 and t["os_build"] is None:
+            w(f"{title}: no EmbeddedXvd extracted, so no console OS export table of its own; per-build emulator tables and API-set hosts use build {t.get('build')} (from {t.get('os_build_hint')}, not a console OS version).")
+            w("")
+        elif len(ti) > 1:
             mine = {lib.lower() for lib, v in libs.items() if title in v["versions"]}
             parts = []
             for o in ti:
-                if o == title:
+                if o == title or ti[o]["os_build"] is None:
                     continue
                 theirs = {lib.lower() for lib, v in libs.items() if o in v["versions"]}
                 extra = sum(1 for lib, v in libs.items() if title in v["versions"] and o in v["versions"]
@@ -528,7 +614,7 @@ def library_map(summary, libs):
     tnames = list(ti)
     w("## Xbox console libraries (EmbeddedXvd, union of all analysed titles)")
     w("")
-    w("Console-related exports of the DLLs in each title's EmbeddedXvd `Windows\\System32` and `System32\\forwarders` (union, so the newest console OS defines the surface; see Scope: exports a same-named PC System32 DLL also has are not counted), plus the GDK wrappers the emulator redirects inside the Fortnite EXE (statically linked, not exports; build-specific). The emulator's `mfplat.dll` proxy shadows the PC one for the title, so console mfplat exports it does not forward are counted missing. xgameruntime.dll exports only its dispatcher entry points; the GDK services behind it (XGameSave, XGameUi, XNetworking, ...) are reached via `QueryApiImpl` and are not enumerated here; its exports all exist in the PC xgameruntime.dll, so it is not counted. Import attribution for API-set imports picks one host DLL (KernelBase, ucrtbase, ntdll, combase, ... first).")
+    w("Console-related exports of the DLLs in each title's EmbeddedXvd `Windows\\System32` and `System32\\forwarders` (union, so the newest console OS defines the surface; see Scope: exports a same-named PC System32 DLL also has are not counted), plus the GDK wrappers the emulator redirects inside the Fortnite EXE (statically linked, not exports; build-specific). The emulator's `mfplat.dll` proxy shadows the PC one for the title, so console mfplat exports it does not forward are counted missing. xgameruntime.dll exports only its dispatcher entry points; the GDK services behind it (XGameSave, XGameUi, XNetworking, ...) are reached via `QueryApiImpl` and are not enumerated here; its exports all exist in the PC xgameruntime.dll, so it is not counted. Import attribution for API-set imports uses the console host from `console_apiset_hosts.txt` when that table lists the function for the title's OS build, otherwise one host DLL (KernelBase, ucrtbase, ntdll, combase, ... first). Export names found as GetProcAddress strings in a title binary that also names the DLL count as title use. Emulator tables with per-OS-build variants (kernel32legacy `exports_19041.txt`) are applied per title build; a union row takes the lowest status across the builds that have the export.")
     w("")
     w("| Library | Folder | Same-named PC DLL | Console-only exports | " + " | ".join(XORDER) + " | " + " | ".join(f"{t} imports" for t in tnames) + " | Versions |")
     w("|---|---|---|---|" + "---|" * len(XORDER) + "---|" * len(tnames) + "---|")
@@ -634,7 +720,9 @@ def library_map(summary, libs):
         w("- Fortnite: CONCRT140.dll loads and resolves (chatprobe evidence).")
     for mod, fs in cfg.get("ordinal_evidence", {}).items():
         w(f"- {mod} ordinal imports: " + "; ".join(f"{f}: {e}" for f, e in fs.items()) + ".")
-    w("- XAudio2_9 ordinal imports are treated as PC-provided because the PC DLL exports those ordinals; that the console DLL uses the same ordinals was not checked here. XAudio2 starts streaming in the Fortnite log, but there is no audio.")
+    w("- Ordinal imports (XAudio2_9 #1/#2/#4/#5/#6, GameInput #1) are resolved to names with the console DLL of the importing title's own EmbeddedXvd, then classified like named imports: XAudio2_9 against crates/compat/xaudio2_9 (its table is checked against the built target/release/XAudio2_9.dll), GameInput against the PC DLL. A title without an EmbeddedXvd (Minecraft) keeps the `#N` form. XAudio2 starts streaming in the Fortnite log, but there is no audio.")
+    w("- GetProcAddress-string usage: an export name counts as used by a title when a binary of that title holds it as an exact ASCII string (not preceded by a printable byte, NUL-terminated) and also names the DLL (ASCII or UTF-16). It marks the console row as imported (lighter colour, targeted), but it is not a load observed at run time and does not enter the per-title import tables.")
+    w("- API-set imports whose console host (`crates/compat/compat-common/data/console_apiset_hosts.txt`, per OS build with the runtime's nearest-lower-build rule) is minuserx, advapi32legacy, kernel32legacy or minappmodelx are listed against that host; API-set functions the host table does not list keep the PC name-match treatment, and that table is partial.")
     w("- PC-twin rows (minuserx -> user32, advapi32legacy -> advapi32, minappmodelx -> twinapi.appcore / kernel.appcore, for whichever of them has no emulator crate) are export-name matches on the twin only; the console DLLs' own behaviour is not reproduced. kernel32legacy is emulated by crates/compat/kernel32legacy and has no PC-twin rows.")
     w("- PC-provided is an export-name match (ordinal match for ordinal-only exports) against this PC's System32; behaviour differences between console and PC system DLLs are not measured, and such exports are outside this map.")
     w("- Titles without run evidence are classified statically only.")
@@ -669,15 +757,19 @@ def selftest():
     check("every twin flip carries a note", all(n in tw[k]["notes"] for k, n, _ in flips))
     _emu_twins = {"kernel32legacy.dll", "advapi32legacy.dll"} & {e.lower() for e in cfg["emulator"]}
     _mux_emu = "minuserx.dll" in {e.lower() for e in cfg["emulator"]}
-    check("35 twin rows flip (25 once kernel32legacy and advapi32legacy are emulated, 21 fewer once minuserx is)", len(flips) == (25 if len(_emu_twins) == 2 else 35) - (21 if _mux_emu else 0))
+    _mam_emu = "minappmodelx.dll" in {e.lower() for e in cfg["emulator"]}
+    check("35 twin rows flip (25 once kernel32legacy and advapi32legacy are emulated, 21 fewer once minuserx is, 4 fewer once minappmodelx is)", len(flips) == (25 if len(_emu_twins) == 2 else 35) - (21 if _mux_emu else 0) - (4 if _mam_emu else 0))
     cov0 = sum(1 for r in rows0 if r[1] in COVERED)
     cov1 = sum(1 for r in rows1 if r[1] in COVERED)
     check("covered rises by exactly the twin flips", cov1 - cov0 == len(flips))
-    hl, hk = next((k, n) for k, n, _ in sorted(flips, key=lambda f: f[0].lower() != "minuserx.dll"))
-    EVIDENCE_OVERRIDE = {"oshost.json": {"file": "crates/compat/oshost/src/lib.rs", "hooks": {tw[hl]["pc_twin"][0].lower(): [hk]}}}
-    h = console()
-    st = {r[0]: r[1] for k, v in h.items() if k == hl for r in v["rows"]}
-    check("oshost hook on the PC twin makes the row hooked", st[hk] == "hooked")
+    if flips:
+        hl, hk = next((k, n) for k, n, _ in sorted(flips, key=lambda f: f[0].lower() != "minuserx.dll"))
+        EVIDENCE_OVERRIDE = {"oshost.json": {"file": "crates/compat/oshost/src/lib.rs", "hooks": {tw[hl]["pc_twin"][0].lower(): [hk]}}}
+        h = console()
+        st = {r[0]: r[1] for k, v in h.items() if k == hl for r in v["rows"]}
+        check("oshost hook on the PC twin makes the row hooked", st[hk] == "hooked")
+    else:
+        print("skip oshost hook on the PC twin makes the row hooked (every twin library is emulated, no PC-twin row left)")
     EVIDENCE_OVERRIDE = {}
     g = imports()
     check("GameInput #1 done without touching XAudio2", g.get("GameInput") == ["done"] and g.get("XAudio2_9", []).count(cfg["import_overrides"].get("XAudio2_9.dll", "done")) == 5)
@@ -696,6 +788,25 @@ def selftest():
     EVIDENCE_OVERRIDE = {"chatprobe.json": {"title": "Fortnite", "modules": {"GameChat2.dll": {"loaded": False, "unresolved": []}}}}
     check("chatprobe with loaded false changes nothing", unverified_lists("Fortnite")[0] == {"gamechat2.dll"})
     EVIDENCE_OVERRIDE = saved
+    ti = jload("title_imports.json")
+    fn = ti.get("Fortnite", {})
+    full = {(b, m, f): (s_, e) for b, mm, rs in title_rows("Fortnite", fn, full=True) for f, s_, e in rs for m in [mm["module"]]} if fn else {}
+    xa = full.get(("FortniteClient-XSX-Shipping.exe", "XAudio2_9.dll", "#1"))
+    check("XAudio2_9 #1 links to the console ordinal name XAudio2Create", xa is not None and "XAudio2Create" in xa[1] and xa[0] == cfg["emulator"].get("xaudio2_9.dll", {}).get("functions", {}).get("XAudio2Create", "pc"))
+    hosted = [(f, s_, e) for (b, m, f), (s_, e) in full.items() if "console host" in e]
+    check("console-hosted API-set imports are listed against their console host", any(f == "PostMessageW" and "minuserx.dll" in e for f, s_, e in hosted)
+          and any(f == "RegOpenKeyW" and "advapi32legacy.dll" in e for f, s_, e in hosted))
+    k32 = cfg["emulator"].get("kernel32legacy.dll", {})
+    if "19041" in k32.get("builds", {}) and fn.get("build") == 19041:
+        sta = [e for f, s_, e in hosted if "kernel32legacy.dll" in e]
+        check("Fortnite (OS 19041) kernel32legacy rows use the 19041 table", bool(sta) and all("exports_19041.txt" in e for e in sta))
+    ahw = next((v for k, v in tw.items() if k.lower() == "audiohalwrapper.dll"), None)
+    dyn = {f for t_ in ti.values() for bins in t_.get("dynamic", {}).values() for lib, fs in bins.items() if lib.lower() == "audiohalwrapper.dll" for f in fs}
+    check("GetProcAddress-string usage marks AudioHALWrapper rows as title-used", ahw is not None and bool(dyn) and all(r[2] for r in ahw["rows"] if r[0] in dyn))
+    cc = os.path.join(dat, "emulator_cfg_checks.json")
+    for dll_, c_ in (json.load(open(cc, encoding="utf-8")) if os.path.isfile(cc) else {}).items():
+        for f_ in c_.get("not_in_built_dll", []):
+            check(f"{dll_}!{f_} is not counted as emulator-provided (absent from {c_['built_dll']})", f_ not in cfg["emulator"].get(dll_.lower(), {}).get("functions", {}))
     nt, tg = not_targeted(tw)
     check("not-targeted + targeted = console denominator", sum(len(tw[l]["rows"]) for l in nt + tg) == len(rows1))
     check("not-targeted libraries have no title import", not any(r[2] for l in nt for r in tw[l]["rows"]))

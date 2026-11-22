@@ -1,4 +1,4 @@
-1 XApuConnect implemented | processType 2 (Opus) on host; types 1 and 3 return E_NOTIMPL, no title uses them
+1 XApuConnect stub | processType 2 (Opus) decodes on the host with the console validation; processTypes 1 and 3 pass the console parameter checks and then return E_NOTIMPL: the codecs are not identified in xapu.dll or any title (see docs/BLOCKERS.md, xapu processTypes 1 and 3)
 2 XApuDisconnect implemented | waits for in-flight host decodes, then frees
 3 XApuEnqueueCommand implemented | async like the console submit ring: commands go to a host worker pool, per-stream order kept
 4 XApuDequeueResult implemented | results commit in submission order, result event signalled on commit

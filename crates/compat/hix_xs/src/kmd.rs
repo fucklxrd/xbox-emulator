@@ -26,6 +26,7 @@ static ARMED: AtomicU32 = AtomicU32::new(0);
 static ARM_VALUE: AtomicU32 = AtomicU32::new(0);
 static LAST_CMD: AtomicU32 = AtomicU32::new(u32::MAX);
 static REQUESTS: AtomicU32 = AtomicU32::new(0);
+static HISTORY: std::sync::Mutex<Vec<u32>> = std::sync::Mutex::new(Vec::new());
 
 extern "system" {
     fn VirtualAlloc(addr: *mut c_void, size: usize, kind: u32, protect: u32) -> *mut c_void;
@@ -66,6 +67,18 @@ pub fn last_command() -> Option<u32> {
     (c != u32::MAX).then_some(c)
 }
 
+pub fn history() -> Vec<u32> {
+    HISTORY.lock().unwrap().clone()
+}
+
+pub fn clear_history() {
+    HISTORY.lock().unwrap().clear();
+}
+
+pub fn last_status() -> u32 {
+    unsafe { rd(region0() + DATA_STATUS) }
+}
+
 pub fn requests() -> u32 {
     REQUESTS.load(Ordering::Acquire)
 }
@@ -90,8 +103,10 @@ unsafe fn service() {
     let cmd = rd(mb + MAILBOX_CMD);
     LAST_CMD.store(cmd, Ordering::Release);
     REQUESTS.fetch_add(1, Ordering::AcqRel);
-    wr(data + DATA_STATUS, 0);
-    wr(data + DATA_SIZE, crate::hang_stream::respond(cmd, data, mb).unwrap_or(0));
+    HISTORY.lock().unwrap().push(cmd);
+    let (status, size) = crate::hang_stream::respond(cmd, data, mb);
+    wr(data + DATA_STATUS, status);
+    wr(data + DATA_SIZE, size);
     fence(Ordering::SeqCst);
     wr(data + DATA_ACK, seq);
     fence(Ordering::SeqCst);

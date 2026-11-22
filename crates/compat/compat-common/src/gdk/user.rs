@@ -1,5 +1,5 @@
 use super::xasync::{self, Payload};
-use super::{log, next_token, put_str, put_wstr, Guid, Iface, This, E_INVALIDARG, E_NOT_FOUND, S_OK};
+use super::{log, next_token, put_str, put_wstr, Guid, Iface, This, E_INVALIDARG, S_OK};
 use core::ffi::c_void;
 use std::sync::OnceLock;
 
@@ -96,6 +96,9 @@ static OP_RESOLVE_PRIV: &[u8] = b"XUserResolvePrivilegeWithUiAsync\0";
 static OP_RESOLVE_ISSUE: &[u8] = b"XUserResolveIssueWithUiAsync\0";
 static OP_PICTURE: &[u8] = b"XUserGetGamerPictureAsync\0";
 
+pub const E_GAMEUSER_DEFERRAL_NOT_AVAILABLE: i32 = 0x8924_5103u32 as i32;
+pub const E_GAMEUSER_USER_NOT_FOUND: i32 = 0x8924_5104u32 as i32;
+
 unsafe extern "system" fn duplicate_handle(_t: This, u: usize, out: *mut usize) -> i32 {
     if u == 0 || out.is_null() {
         return E_INVALIDARG;
@@ -161,7 +164,7 @@ unsafe extern "system" fn find_by_local_id(_t: This, local: u64, out: *mut usize
         return E_INVALIDARG;
     }
     if local != LOCAL_ID {
-        return E_NOT_FOUND;
+        return E_GAMEUSER_USER_NOT_FOUND;
     }
     *out = handle();
     S_OK
@@ -180,7 +183,7 @@ unsafe extern "system" fn find_by_id(_t: This, xuid: u64, out: *mut usize) -> i3
         return E_INVALIDARG;
     }
     if xuid != user().xuid {
-        return E_NOT_FOUND;
+        return E_GAMEUSER_USER_NOT_FOUND;
     }
     *out = handle();
     S_OK
@@ -421,7 +424,7 @@ unsafe extern "system" fn get_sign_out_deferral(_t: This, out: *mut usize) -> i3
     if !out.is_null() {
         *out = 0;
     }
-    super::E_FAIL
+    E_GAMEUSER_DEFERRAL_NOT_AVAILABLE
 }
 
 unsafe extern "system" fn add_by_id_async(_t: This, xuid: u64, block: *mut c_void) -> i32 {

@@ -17,12 +17,36 @@ pub mod hlsl;
 #[cfg(windows)]
 pub mod dxc;
 pub mod meta;
+pub mod dxil_meta;
 pub mod decls;
 pub mod uearchive;
 pub mod rdna2;
 pub mod gcn;
 pub mod gds_abi;
 pub mod global_abi;
+pub mod centroid_abi;
+pub mod runtime_hlsl;
+#[cfg(windows)]
+pub mod shader_cache;
+#[cfg(windows)]
+#[path = "../../tools/xreplay/src/d3d.rs"]
+#[allow(dead_code)]
+#[macro_use]
+pub(crate) mod d3d;
+#[cfg(windows)]
+pub mod fma_probe;
+#[cfg(test)]
+mod sm5_helpers_tests;
+
+#[cfg(windows)]
+fn dxil_disassembly(dxbc: &[u8]) -> Option<String> {
+    dxc::disassemble(dxbc).ok()
+}
+
+#[cfg(not(windows))]
+fn dxil_disassembly(_: &[u8]) -> Option<String> {
+    None
+}
 
 /// Little-endian readers with explicit bounds checks.
 fn u32_at(b: &[u8], off: usize) -> Result<u32, String> {
@@ -82,7 +106,6 @@ impl Dxbc {
     }
 }
 
-/// Parse a standalone serialized root signature or an extracted RTS0 chunk body.
 pub fn parse_root_signature(data: &[u8]) -> Result<meta::RootSig, String> {
     let body = if data.starts_with(b"DXBC") {
         let dxbc = Dxbc::parse(data)?;
@@ -249,6 +272,8 @@ pub fn extract(dxbc: &[u8]) -> Result<ShaderExtract, String> {
     let chunk_body = |cc: &[u8; 4]| container.chunk(cc).map(|c| &dxbc[c.offset..c.offset + c.size]);
     let entry = find_entry_name(&fssm);
 
+    let mut gs_info = chunk_body(b"PSV0").and_then(meta::parse_psv0_gs);
+    dxil_meta::fill_num_threads(&mut gs_info, || dxil_disassembly(dxbc))?;
     Ok(ShaderExtract {
         stage,
         shader_model: sm,
@@ -266,7 +291,7 @@ pub fn extract(dxbc: &[u8]) -> Result<ShaderExtract, String> {
         input_sig: chunk_body(b"ISG1").and_then(|b| meta::parse_signature(b).ok()).unwrap_or_default(),
         output_sig: chunk_body(b"OSG1").and_then(|b| meta::parse_signature(b).ok()).unwrap_or_default(),
         resources: chunk_body(b"PSV0").and_then(|b| meta::parse_psv0(b).ok()).unwrap_or_default(),
-        gs_info: chunk_body(b"PSV0").and_then(meta::parse_psv0_gs),
+        gs_info,
         root_sig: chunk_body(b"RTS0").and_then(|b| meta::parse_rts0(b).ok()),
     })
 }

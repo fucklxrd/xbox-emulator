@@ -84,6 +84,14 @@ unsafe extern "system" fn timestamp_dma(this: *mut c_void, addr: u64, a: u32, b:
     crate::timestamp::write(this, true, addr, a, b, c);
 }
 
+static REAL_RESET: AtomicUsize = AtomicUsize::new(0);
+
+unsafe extern "system" fn reset_dma(this: *mut c_void, alloc: *mut c_void, pso: *mut c_void) -> i32 {
+    crate::ts99::forget_list(this);
+    let f: unsafe extern "system" fn(*mut c_void, *mut c_void, *mut c_void) -> i32 = core::mem::transmute(REAL_RESET.load(Ordering::Relaxed));
+    f(this, alloc, pso)
+}
+
 unsafe extern "system" fn fill_dma(this: *mut c_void, va: u64, size: u32, value: u32, flags: u32) {
     crate::fill::fill(this, true, va, size, value, flags);
 }
@@ -140,6 +148,8 @@ unsafe fn build(real_vt: *const usize) {
     TARGET[12].store(crate::video_probe::install(*real_vt.add(16)), Ordering::Relaxed);
     TARGET[DMA_SLOT_FILL].store(fill_dma as usize, Ordering::Relaxed);
     TARGET[DMA_SLOT_TIMESTAMP].store(timestamp_dma as usize, Ordering::Relaxed);
+    REAL_RESET.store(*real_vt.add(10), Ordering::Relaxed);
+    TARGET[10].store(reset_dma as usize, Ordering::Relaxed);
     let code = VirtualAlloc(core::ptr::null_mut(), N * 16, 0x3000, 0x40) as *mut u8;
     assert!(!code.is_null(), "d3d12_xs: cannot allocate DMA list thunks");
     for i in 0..N {
@@ -163,6 +173,7 @@ pub fn wrap(real_list: *mut c_void) -> *mut c_void {
     unsafe {
         let real_vt = *(real_list as *const *const usize);
         BUILT.call_once(|| build(real_vt));
+        crate::ts99::forget_list(real_list);
         let layout = std::alloc::Layout::from_size_align(SHIM_SIZE, 16).unwrap();
         let p = std::alloc::alloc_zeroed(layout);
         assert!(!p.is_null(), "d3d12_xs: cannot allocate DMA list shim");

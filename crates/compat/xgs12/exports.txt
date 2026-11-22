@@ -10,8 +10,8 @@
 10 OpenAdapter12 implemented | console returns E_NOTIMPL unconditionally; same here
 11 UMDCreateBlob implemented | native ID3D10Blob (IUnknown/ID3D10Blob QI, underflow-safe Release), object and buffer from XMemAlloc/XMemFree (emulator xmem.dll) with the console XMem attributes 0x4800040/0x4800078
 12 UMDCreateDevice12 implemented | console checks (null params/out -> E_INVALIDARG, version 0x1000a or <= 0x10009, 5 accepted device IIDs else E_NOINTERFACE), then the emulator d3d12_xs D3D12XboxCreateDevice; host D3D12CreateDevice when d3d12_xs.dll is not loaded
-13 UMDCreateRootSignatureDeserializer forwarded | host d3d12.dll with the console E_FAIL -> E_INVALIDARG mapping and null-out check
-14 UMDCreateVersionedRootSignatureDeserializer forwarded | host d3d12.dll with the console E_FAIL -> E_INVALIDARG mapping and null-out check
+13 UMDCreateRootSignatureDeserializer implemented | code thunk, not a PE forwarder: host d3d12.dll with the console E_FAIL -> E_INVALIDARG mapping and null-out check
+14 UMDCreateVersionedRootSignatureDeserializer implemented | code thunk, not a PE forwarder: host d3d12.dll with the console E_FAIL -> E_INVALIDARG mapping and null-out check
 15 UMDGetDebugInterface implemented | console release/instrumented driver returns E_NOINTERFACE unconditionally; same here
-16 UMDSerializeRootSignature forwarded | d3d12_xs D3D12SerializeRootSignature (host d3d12.dll) when loaded, else host d3d12.dll
+16 UMDSerializeRootSignature implemented | code thunk, not a PE forwarder: d3d12_xs D3D12SerializeRootSignature (host d3d12.dll) when loaded, else host d3d12.dll
 17 UMDSerializeVersionedRootSignature implemented | console null checks and version 1.0/1.1 gate (other versions: console error-blob text + E_FAIL), serialization forwarded to the d3d12_xs/host serializer

@@ -194,6 +194,23 @@ pub fn bundle_for_buffer(addr: usize) -> Option<usize> {
     with_bundles(|t| t.by_buffer.get(&addr).copied())
 }
 
+pub fn live_bundles() -> Vec<usize> {
+    with_bundles(|t| {
+        let mut v: Vec<usize> = t.by_buffer.values().copied().filter(|b| !t.failed.get(b).copied().unwrap_or(false)).collect();
+        v.sort_unstable();
+        v.dedup();
+        v
+    })
+}
+
+pub fn forget_bundle(key: usize) {
+    with_bundles(|t| {
+        t.by_buffer.retain(|_, b| *b != key);
+        t.owned.remove(&key);
+        t.failed.remove(&key);
+    });
+}
+
 pub fn execution_command_size(list_type: u32, failed: bool) -> u32 {
     if list_type != LIST_TYPE_BUNDLE || failed {
         return 0;
@@ -280,6 +297,7 @@ unsafe extern "system" fn cl_close_bundle_x(this: *mut c_void, pp: *mut *mut c_v
             if !pp.is_null() && !title_buffer {
                 unsafe { *pp = dest as *mut c_void };
             }
+            crate::indirect_bundle::note_close(key);
             BUNDLE_RECORD_SIZE
         }
     }

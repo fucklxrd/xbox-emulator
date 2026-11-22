@@ -425,3 +425,104 @@ fn install_fills_the_dev_a_slots() {
     assert_eq!(v[77], 0);
     assert_eq!(v[63], create_derived_compute_pso_x as usize);
 }
+
+fn tex_res(dim: u32, fmt: u32, samples: u32) -> [u8; 0x38] {
+    let mut r = [0u8; 0x38];
+    wr32(&mut r, 0, dim);
+    wr32(&mut r, 0x20, fmt);
+    wr32(&mut r, 0x24, samples);
+    r
+}
+
+#[test]
+fn unknown_texture_view_format_comes_from_the_resource_typed() {
+    let mut pc = vec![0u8; 0x28];
+    wr32(&mut pc, 4, 4);
+    assert!(fit_texture_view(&mut pc, &tex_res(3, 60, 1), false));
+    assert_eq!((rd32(&pc, 0), rd32(&pc, 4)), (61, 4), "R8_TYPELESS resource gives an R8_UNORM view");
+    let mut pc = vec![0u8; 0x28];
+    wr32(&mut pc, 4, 4);
+    assert!(fit_texture_view(&mut pc, &tex_res(3, 26, 1), false));
+    assert_eq!(rd32(&pc, 0), 26);
+    let mut keep = vec![0u8; 0x28];
+    wr32(&mut keep, 0, 28);
+    wr32(&mut keep, 4, 4);
+    assert!(!fit_texture_view(&mut keep, &tex_res(3, 27, 1), false), "a typed view format is kept");
+    assert_eq!(rd32(&keep, 0), 28);
+    let mut buf = vec![0u8; 0x28];
+    wr32(&mut buf, 4, 1);
+    assert!(!fit_texture_view(&mut buf, &tex_res(1, 0, 1), false), "buffer views keep UNKNOWN for structured data");
+    assert_eq!(rd32(&buf, 0), 0);
+}
+
+#[test]
+fn multisampled_resources_get_ms_view_dimensions() {
+    let mut pc = vec![0u8; 0x28];
+    wr32(&mut pc, 0, 61);
+    wr32(&mut pc, 4, 4);
+    wr32(&mut pc, 0x14, 1);
+    assert!(fit_texture_view(&mut pc, &tex_res(3, 61, 2), false));
+    assert_eq!(rd32(&pc, 4), 6);
+    assert!(pc[0x10..0x28].iter().all(|b| *b == 0));
+    let mut arr = vec![0u8; 0x28];
+    wr32(&mut arr, 0, 61);
+    wr32(&mut arr, 4, 5);
+    wr32(&mut arr, 0x14, 1);
+    wr32(&mut arr, 0x18, 2);
+    wr32(&mut arr, 0x1c, 3);
+    assert!(fit_texture_view(&mut arr, &tex_res(3, 61, 2), false));
+    assert_eq!((rd32(&arr, 4), rd32(&arr, 0x10), rd32(&arr, 0x14)), (7, 2, 3), "array slices move to the MS array fields");
+    let mut uav = vec![0u8; 0x28];
+    wr32(&mut uav, 0, 61);
+    wr32(&mut uav, 4, 4);
+    assert!(!fit_texture_view(&mut uav, &tex_res(3, 61, 2), true));
+}
+
+#[test]
+fn fitted_view_of_a_2x_r8_target_keeps_the_device_alive() {
+    unsafe {
+        let iid_dev = Guid { d1: 0x1898_19f1, d2: 0x1db6, d3: 0x4b57, d4: [0xbe, 0x54, 0x18, 0x21, 0x33, 0x9b, 0x85, 0xf7] };
+        let iid_res = Guid { d1: 0x6964_42be, d2: 0xa72e, d3: 0x4059, d4: [0xbc, 0x79, 0x5b, 0x5c, 0x98, 0x04, 0x0f, 0xad] };
+        let iid_dh = Guid { d1: 0x8efb_471d, d2: 0x616c, d3: 0x4f49, d4: [0x90, 0xf7, 0x12, 0x7b, 0xb7, 0x63, 0xfa, 0x51] };
+        let p = crate::host_proc(b"D3D12CreateDevice\0");
+        let mk: extern "system" fn(*mut c_void, u32, *const Guid, *mut *mut c_void) -> i32 = core::mem::transmute(p);
+        let mut dev: *mut c_void = core::ptr::null_mut();
+        assert!(mk(core::ptr::null_mut(), 0xb000, &iid_dev, &mut dev) >= 0 && !dev.is_null());
+        let heap: [u32; 5] = [1, 0, 0, 1, 1];
+        let mut rd = tex_res(3, 61, 2);
+        rd[0x10..0x18].copy_from_slice(&1920u64.to_le_bytes());
+        wr32(&mut rd, 0x18, 1080);
+        rd[0x1c..0x1e].copy_from_slice(&1u16.to_le_bytes());
+        rd[0x1e..0x20].copy_from_slice(&1u16.to_le_bytes());
+        wr32(&mut rd, 0x30, 1);
+        let committed: unsafe extern "system" fn(*mut c_void, *const u32, u32, *const u8, u32, *const c_void, *const Guid, *mut *mut c_void) -> i32 = core::mem::transmute(vfn(dev, 27));
+        let mut r: *mut c_void = core::ptr::null_mut();
+        assert!(committed(dev, heap.as_ptr(), 0, rd.as_ptr(), 4, core::ptr::null(), &iid_res, &mut r) >= 0 && !r.is_null());
+        let hd = [0u32, 1, 0, 0];
+        let mk_heap: unsafe extern "system" fn(*mut c_void, *const u32, *const Guid, *mut *mut c_void) -> i32 = core::mem::transmute(vfn(dev, 14));
+        let mut dh: *mut c_void = core::ptr::null_mut();
+        assert!(mk_heap(dev, hd.as_ptr(), &iid_dh, &mut dh) >= 0 && !dh.is_null());
+        let cpu_start: unsafe extern "system" fn(*mut c_void, *mut usize) -> *mut usize = core::mem::transmute(vfn(dh, 9));
+        let mut h = 0usize;
+        cpu_start(dh, &mut h);
+        let mut xdesc = vec![0u8; 0x48];
+        wr32(&mut xdesc, 4, 4);
+        wr32(&mut xdesc, 8, 0x1688);
+        wr32(&mut xdesc, 0x14, 1);
+        xdesc[0x28..0x30].copy_from_slice(&NO_ADDRESS.to_le_bytes());
+        wr32(&mut xdesc, 0x30, 0x2f);
+        wr32(&mut xdesc, 0x34, 4);
+        let plan = plan_placed_view(r, xdesc.as_ptr(), false, &|_| None);
+        match &plan {
+            ViewPlan::Desc(_, d, _, _) => assert_eq!((rd32(d, 0), rd32(d, 4)), (61, 6), "the Trackmania view becomes an R8_UNORM TEXTURE2DMS view"),
+            p => panic!("unexpected plan {p:?}"),
+        }
+        emit_srv(dev, plan, h);
+        let removed: unsafe extern "system" fn(*mut c_void) -> i32 = core::mem::transmute(vfn(dev, 37));
+        assert_eq!(removed(dev), 0);
+        for o in [dh, r, dev] {
+            let rel: unsafe extern "system" fn(*mut c_void) -> u32 = core::mem::transmute(vfn(o, 2));
+            rel(o);
+        }
+    }
+}

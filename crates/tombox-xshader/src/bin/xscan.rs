@@ -390,7 +390,7 @@ fn process(blob: &[u8], compile: bool) -> (String, Result<(), String>, bool) {
                     // Default: DXC (shader model 6.0), in process.
                     let profile = tombox_xshader::dxc::profile_for(t.profile);
                     let path = tombox_xshader::dxc::cache_path(&t.hlsl, &profile);
-                    if path.exists() {
+                    if tombox_xshader::dxc::cache_load(&t.hlsl, &profile).is_some() {
                         return (st, Ok(()), false);
                     }
                     let t0 = std::time::Instant::now();

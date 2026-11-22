@@ -49,6 +49,20 @@ impl Registry {
         v
     }
 
+    pub fn replace(&mut self, old: usize, new: usize) {
+        if let Some(p) = self.prev.remove(&old) {
+            self.prev.insert(new, p);
+        }
+        if let Some(o) = self.origin.remove(&old) {
+            self.origin.insert(new, o);
+        }
+        for v in self.prev.values_mut() {
+            if *v == old {
+                *v = new;
+            }
+        }
+    }
+
     pub fn take(&mut self, origin: usize) -> Vec<usize> {
         let segs: Vec<usize> = self.origin.iter().filter(|(_, &o)| o == origin).map(|(&s, _)| s).collect();
         for s in &segs {
@@ -151,10 +165,38 @@ unsafe fn acquire(like: *mut c_void) -> *mut c_void {
 }
 
 unsafe fn give_back(seg: usize) {
+    crate::indirect_bundle::forget(seg);
     let mut pool = POOL.lock().unwrap_or_else(|e| e.into_inner());
     if let Some(p) = pool.iter_mut().find(|p| p.list == seg) {
         p.busy = false;
     }
+}
+
+pub(crate) unsafe fn acquire_part(like: *mut c_void) -> *mut c_void {
+    unsafe { acquire(like) }
+}
+
+pub(crate) unsafe fn abandon_part(seg: *mut c_void) {
+    let close: unsafe extern "system" fn(*mut c_void) -> i32 = unsafe { core::mem::transmute(vslot(seg, SLOT_CLOSE)) };
+    unsafe { close(seg) };
+    unsafe { give_back(seg as usize) };
+}
+
+pub(crate) unsafe fn retire_part(seg: *mut c_void) {
+    unsafe { give_back(seg as usize) };
+}
+
+pub(crate) unsafe fn part_idle(seg: usize) -> bool {
+    let pool = POOL.lock().unwrap_or_else(|e| e.into_inner());
+    pool.iter().find(|p| p.list == seg).map_or(true, |p| unsafe { fence_done(p.fence, p.value) })
+}
+
+pub(crate) fn link(prev: *mut c_void, seg: *mut c_void) {
+    reg(|r| r.add(prev as usize, seg as usize));
+}
+
+pub(crate) fn relink(old: *mut c_void, new: *mut c_void) {
+    reg(|r| r.replace(old as usize, new as usize));
 }
 
 pub unsafe fn split_for_wait(list: *mut c_void, op: Op) -> bool {
@@ -272,7 +314,12 @@ unsafe extern "system" fn h_addref(this: *mut c_void) -> u32 {
 
 unsafe extern "system" fn h_release(this: *mut c_void) -> u32 {
     let f: unsafe extern "system" fn(*mut c_void) -> u32 = unsafe { core::mem::transmute(prev(SLOT_RELEASE)) };
-    unsafe { f(origin(this)) }
+    let o = origin(this);
+    let n = unsafe { f(o) };
+    if crate::indirect_bundle::title_released(o as usize, n) {
+        crate::console_slots_cl2::forget_bundle(o as usize);
+    }
+    n
 }
 
 unsafe extern "system" fn h_reset(this: *mut c_void, alloc: *mut c_void, pso: *mut c_void) -> i32 {
@@ -337,6 +384,20 @@ mod tests {
         assert_eq!(t, vec![0x20, 0x30]);
         assert_eq!(r.chain(0x30), vec![0x30]);
         assert_eq!(r.chain(0x60), vec![0x50, 0x60]);
+    }
+
+    #[test]
+    fn a_middle_part_is_replaced_in_place_in_the_chain() {
+        let mut r = Registry::default();
+        r.add(0x10, 0x20);
+        r.add(0x20, 0x30);
+        r.replace(0x20, 0x40);
+        assert_eq!(r.chain(0x30), vec![0x10, 0x40, 0x30]);
+        assert_eq!(r.origin_of(0x40), 0x10);
+        assert_eq!(r.origin_of(0x20), 0x20);
+        let mut t = r.take(0x10);
+        t.sort();
+        assert_eq!(t, vec![0x30, 0x40]);
     }
 
     #[test]

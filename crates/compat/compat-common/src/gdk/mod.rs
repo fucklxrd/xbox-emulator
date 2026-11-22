@@ -14,6 +14,7 @@ pub mod late;
 pub mod launcher;
 pub mod identity;
 pub mod media;
+pub mod memstatus;
 pub mod mediacontrol;
 pub mod net;
 pub mod rt;

@@ -321,7 +321,7 @@ fn hook_table_covers_the_hooked_rows() {
         }
     }
     assert_eq!(coverage::ROWS.len(), 37);
-    assert!(coverage::summary().starts_with("37 rows: 10 hooked here, 1 hooked by another owner, 3 emulated by a compat crate, 23 name-match pc"));
+    assert!(coverage::summary().starts_with("37 rows: 6 hooked here, 1 hooked by another owner, 7 emulated by a compat crate, 23 name-match pc"));
 }
 
 #[test]
@@ -350,7 +350,9 @@ fn late_load_notification_patches_a_title_module() {
     assert_eq!(rd(&img, 0x500), find("SetThreadAffinityMask"));
     assert_eq!(rd(&img, 0x508), find("GetProcessAffinityMask"));
     assert_eq!(rd(&img, 0x540), 0);
-    assert_eq!(rd(&img, 0x800), find("RegisterAppStateChangeNotification"));
+    assert!(!compat_common::os_host::routes::covered("api-ms-win-core-psm-appnotify-l1-1-0.dll", "RegisterAppStateChangeNotification", &hooks));
+    let routed = compat_common::os_host::routes::lookup("api-ms-win-core-psm-appnotify-l1-1-0.dll", "RegisterAppStateChangeNotification", compat_common::os_host::routes::current_build()).map(|r| unsafe { compat_common::os_host::routes::target(r) }).filter(|t| *t != 0);
+    assert_eq!(rd(&img, 0x800), routed.unwrap_or(0x1234));
     let mut sys = synthetic_pe();
     let wpath: Vec<u16> = format!("{}System32\\fake.dll", patch::windows_dir()).encode_utf16().collect();
     us[0..2].copy_from_slice(&((wpath.len() * 2) as u16).to_le_bytes());

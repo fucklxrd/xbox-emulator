@@ -130,7 +130,6 @@ unsafe fn store_root_data(unknown: *mut c_void, blob: &[u8]) {
     if query(unknown, &IID_ROOT_SIGNATURE, &mut root) < 0 || root.is_null() {
         return;
     }
-    // CreateRootSignature can return IUnknown. Only the queried root interface has these slots.
     let vt = *(root as *const *const usize);
     let set: unsafe extern "system" fn(*mut c_void, *const Guid, u32, *const u8) -> i32 =
         core::mem::transmute(*vt.add(4));
@@ -142,7 +141,6 @@ unsafe fn store_root_data(unknown: *mut c_void, blob: &[u8]) {
     }
 }
 
-/// Read the original RTS0 body from a live ID3D12RootSignature supplied by a PSO stream.
 pub unsafe fn root_data(root: *mut c_void) -> Option<Vec<u8>> {
     if root.is_null() {
         return None;

@@ -3,10 +3,10 @@
 3 ??1NpConnection@@UEAA@XZ implemented | releases pipe handle, events and path BSTR
 4 ??1TcpConnection@@UEAA@XZ implemented | closes listen socket and socket event, frees server name
 5 ??1XbtpClientAdapter@@UEAA@XZ implemented | close session if in session, disconnect, release connection and channel
-6 ??1XbtpConnectionDispatcher@@QEAA@XZ missing
+6 ??1XbtpConnectionDispatcher@@QEAA@XZ implemented | Shutdown then frees the impl (console 0x12cc0); second call no-op
 7 ??1XbtpExtensionRegistry@@QEAA@XZ implemented | frees impl; dictionary releases definitions; second call is a no-op
 8 ?AddExtension@XbtpExtensionRegistry@@QEAAJV?$shared_ptr@UExtensionDefinition@@@std@@@Z implemented | by-value shared_ptr taken and released; null -> E_INVALIDARG; same id twice -> 0x80071392
-9 ?AddPipeEndpoint@XbtpConnectionDispatcher@@QEAAJPEBG@Z missing
+9 ?AddPipeEndpoint@XbtpConnectionDispatcher@@QEAAJPEBG@Z implemented | NpConnection::InitializeServer_sp(path) then added to the Run wait set (console 0x13910); no impl -> E_INVALIDARG
 10 ?BeginSession@XbtpClientAdapter@@QEAAJAEBU_GUID@@@Z implemented | BeginSession(ext, 30000)
 11 ?BeginSession@XbtpClientAdapter@@QEAAJAEBU_GUID@@K@Z implemented | negotiate (CreateSessionRequest, response, location), -6 redirect via OpenRedirect + Connect + renegotiate; other status -> 0x8C1101xx
 12 ?Connect@XbtpClientAdapter@@QEAAJK@Z implemented | connect channel if disconnected, ConnectRequest XbtpClientAgent/221000/GameCore, fixed response + agent; status!=0 -> 0x83760002
@@ -23,7 +23,7 @@
 23 ?DeserializeFixedCreateSessionResponse@@YAJKPEADPEAUXBTP_CREATE_SESSION_RESPONSE_MESSAGE@@@Z implemented | 0x20-byte fixed part
 24 ?DeserializeFixedExtensionMessage@@YAJAEBUXBTP_MESSAGE_HEADER@@KPEADAEAUXBTP_BEGIN_MESSAGE@@@Z implemented | 0x20-byte body prefix after header
 25 ?Initialize@XbtpClientAdapter@@QEAAJV?$shared_ptr@VXbtpConnection@@@std@@@Z implemented | null connection -> E_INVALIDARG; by-value shared_ptr always released
-26 ?Initialize@XbtpConnectionDispatcher@@QEAAJV?$shared_ptr@VXbtpExtensionRegistry@@@std@@V?$shared_ptr@VXbtpConnection@@@3@1@Z missing
+26 ?Initialize@XbtpConnectionDispatcher@@QEAAJV?$shared_ptr@VXbtpExtensionRegistry@@@std@@V?$shared_ptr@VXbtpConnection@@@3@1@Z implemented | null registry or tcp shared_ptr -> E_INVALIDARG, link may be null; by-value shared_ptrs taken (console 0x12d10)
 27 ?Initialize@XbtpExtensionRegistry@@QEAAJXZ implemented | out of memory -> E_OUTOFMEMORY with m_impl null; overwrites m_impl like the console; does not read the registry hive
 28 ?Initialize@XbtpSession@@QEAAJAEBU_GUID@@V?$shared_ptr@VXbtpClientAdapter@@@std@@V?$shared_ptr@VXbtpChannel@@@4@@Z implemented | null channel -> E_INVALIDARG; copies GUID, adapter and channel; by-value args always released
 29 ?InitializeClient@NpConnection@@SAJPEBGPEAPEAV1@@Z implemented | raw pointer variant of named-pipe client open
@@ -36,8 +36,8 @@
 36 ?InitializeServer@TcpConnection@@SAJKPEAV?$shared_ptr@VTcpConnection@@@std@@@Z implemented | shared_ptr variant; always wraps
 37 ?InternalLog@@YAXGPEBDPEAD@Z implemented | XtfLogMessage(level,&ctx,0,0,0,fmt,va,0x11) via lazily loaded XtfBaseServices.dll
 38 ?IsExtensionValid@XbtpExtensionRegistry@@QEAA_NAEBU_GUID@@@Z implemented | loaded definitions first, then registered DLLs
-39 ?KdDbgPrint@@YAXPEBD0ZZ forwarded | asm variadic thunk -> KdDbgPrintV -> ntdll vDbgPrintExWithPrefix
-40 ?KdDbgPrintV@@YAXPEBD0PEAD@Z forwarded | ntdll vDbgPrintExWithPrefix(prefix,0,0,fmt,va)
+39 ?KdDbgPrint@@YAXPEBD0ZZ implemented | code thunk, not a PE forwarder: asm variadic thunk -> KdDbgPrintV -> ntdll vDbgPrintExWithPrefix
+40 ?KdDbgPrintV@@YAXPEBD0PEAD@Z implemented | code thunk, not a PE forwarder: ntdll vDbgPrintExWithPrefix(prefix,0,0,fmt,va)
 41 ?LogError@@YAXPEBDZZ implemented | asm variadic thunk, gate XtfLogGetMainLevel>=1, level 2
 42 ?LogErrorV@@YAXPEBDPEAD@Z implemented | gate >=1, level 2
 43 ?LogInfo@@YAXPEBDZZ implemented | asm variadic thunk, gate >=4, level 4
@@ -55,7 +55,7 @@
 55 ?ReceiveOnewayMessage@XbtpSession@@QEAAJKPEAV?$shared_ptr@UXBTP_MESSAGE_BODY@@@std@@@Z implemented | type 1 receive; close/disconnect -> 0x8C110405 and session torn down
 56 ?ReceiveOnewayMessage@XbtpSession@@QEAAJPEAV?$shared_ptr@UXBTP_MESSAGE_BODY@@@std@@@Z implemented | ReceiveOnewayMessage(30000, ...)
 57 ?RegisterExtension@XbtpExtensionRegistry@@QEAAJAEBU_GUID@@PEBG@Z implemented | null path or already-registered DLL -> E_INVALIDARG; expands %ENV% in the path; console log text kept
-58 ?Run@XbtpConnectionDispatcher@@QEAAJXZ missing
+58 ?Run@XbtpConnectionDispatcher@@QEAAJXZ implemented | waits on shutdown + every endpoint event, accepts, one server adapter per channel: connect (0x183ec), session (0x180a8), loop (0x17e14), HandleMessage/HandleExtensionMessage/RouteMetadataMessage (0x17a48/0x175f8/0x17388), router HandleMessage (0x207bc) with Invoke(handler, session, received, reply); worker threads instead of QueueUserWorkItem
 59 ?SendBeginMessage@XbtpSession@@QEAAJKAEBUXBTP_MESSAGE_BODY@@PEAH@Z implemented | exchange id from channel (client +1, server -1), type 2
 60 ?SendEndMessage@XbtpSession@@QEAAJHW4XBTP_STATUS_CODE@@AEBUXBTP_MESSAGE_BODY@@@Z implemented | type 4 with status in operation slot
 61 ?SendMoreMessage@XbtpSession@@QEAAJHAEBUXBTP_MESSAGE_BODY@@@Z implemented | SendMoreMessage(exch, body, nullptr, nullptr)
@@ -68,8 +68,8 @@
 68 ?SerializeCreateSessionResponse@@YAJFAEBU_GUID@@W4XBTP_STATUS_CODE@@PEAUUTF8Text@@KPEAKPEAD@Z implemented | type 0xFFFD, size len+0x20
 69 ?SerializeDisconnect@@YAJFW4XBTP_STATUS_CODE@@KPEAKPEAD@Z implemented | 0xC bytes, type 0xFFFF
 70 ?SerializeFixedExtensionMessage@@YAJFFAEBU_GUID@@HKAEBUXBTP_MESSAGE_BODY@@KPEAKPEAD@Z implemented | 0x28-byte fixed part, msglen=json+bin+0x20; bodies not written (caller appends)
-71 ?Shutdown@XbtpConnectionDispatcher@@QEAAXXZ missing
-72 ?XbtpCompleteSessionSetupInternal@@YAJAEBU_GUID@@_NIV?$shared_ptr@VXbtpConnection@@@std@@PEAPEAVXbtpSession@@@Z missing
+71 ?Shutdown@XbtpConnectionDispatcher@@QEAAXXZ implemented | logs 'Waiting for shutdown to complete', signals shutdown, waits for Run to drain (console 0x138b0)
+72 ?XbtpCompleteSessionSetupInternal@@YAJAEBU_GUID@@_NIV?$shared_ptr@VXbtpConnection@@@std@@PEAPEAVXbtpSession@@@Z implemented | new session + client adapter: Initialize, Connect, BeginSession, XbtpSession::Initialize; failure deletes *out (console 0x3df0)
 73 XbtpGetCurrentTlsEventData implemented
 74 ?XbtpGetPipeNameToHost@@YAJPEAPEAG@Z implemented
 75 ?XbtpGetPipeNameToSystem@@YAJPEAPEAG@Z implemented
@@ -78,14 +78,14 @@
 78 XbtpHasSystemGoneDark implemented
 79 XbtpIsSystemReady implemented
 80 XbtpMarkToolingCritical implemented
-81 ?XbtpOpenPipeSession@@YAJPEBGAEBU_GUID@@1PEAPEAX@Z missing
-82 ?XbtpOpenPipeSession@@YAJPEBGAEBU_GUID@@PEAV?$shared_ptr@VXbtpSession@@@std@@@Z missing
-83 ?XbtpOpenSession@@YAJAEBU_GUID@@PEBGKPEAPEAVXbtpSession@@_N@Z missing
-84 ?XbtpOpenSessionInternal@@YAJAEBU_GUID@@PEBGKPEAPEAVXbtpSession@@_NI@Z missing
-85 ?XbtpOpenXtcSession@@YAJ_KAEBU_GUID@@1PEAPEAX@Z implemented | console returns E_NOTIMPL
+81 ?XbtpOpenPipeSession@@YAJPEBGAEBU_GUID@@1PEAPEAX@Z implemented | validates, shared overload, XbtpSessionImpl QI; no handshake, like console 0x4a10
+82 ?XbtpOpenPipeSession@@YAJPEBGAEBU_GUID@@PEAV?$shared_ptr@VXbtpSession@@@std@@@Z implemented | NpConnection client, CompleteSessionSetupInternal(ext, false, 30000) (console 0x44f0)
+83 ?XbtpOpenSession@@YAJAEBU_GUID@@PEBGKPEAPEAVXbtpSession@@_N@Z implemented | OpenSessionInternal(..., quiet, 30000) (console 0x4400)
+84 ?XbtpOpenSessionInternal@@YAJAEBU_GUID@@PEBGKPEAPEAVXbtpSession@@_NI@Z implemented | null addr -> localhost; port top byte 0 tcp, 1 XbtpLinkConnection (in-process link), else E_INVALIDARG; offline: non-loopback hosts fail like no route (0x8C110303) (console 0x4160)
+85 ?XbtpOpenXtcSession@@YAJ_KAEBU_GUID@@1PEAPEAX@Z stub | fixed failure, no work done: console returns E_NOTIMPL
 86 XbtpSetSystemGoDark implemented
 87 XbtpWaitSystemReady implemented
-88 ?XbtpWrapDispatcher@@YAJV?$shared_ptr@VXbtpConnectionDispatcher@@@std@@AEBU_GUID@@PEAPEAX@Z missing
+88 ?XbtpWrapDispatcher@@YAJV?$shared_ptr@VXbtpConnectionDispatcher@@@std@@AEBU_GUID@@PEAPEAX@Z implemented | null dispatcher or ppv -> E_INVALIDARG; IXbtpDispatcher e6358d7e/335b4b4b: Shutdown, AddExtension(router from metadata), RegisterExtension, SetSessionKey(<=32 chars); RegisterRedirect returns E_NOTIMPL (Connections::AddRedirect 0x11618 not ported, see BLOCKERS)
 89 XbtpConfigureMinimumTransportLogging implemented | XtfLogSetMainLevel or E_NOTIMPL
 90 XbtpConfigureTransportLogging implemented | INIT_HOOK/WSAStartup(0x202) then XtfLogSetMainLevelAndFile, E_NOTIMPL if absent
 91 XbtpCreateExtensionMetadata implemented
@@ -106,28 +106,28 @@
 106 XbtpLinkDecodeStatisticRecord implemented | Gateway/Address/Listening/Port IN/OUT lines with console address formatting
 107 XbtpLinkFreeReservedMemory implemented | state 2->3, CancelIoEx, spin while 0x103, returns previous state
 108 XbtpLinkGetOverlappedResult implemented | 0x103 -> E_PENDING, 0 -> bytes, 0xe078xxxx status table -> 0x8c1105xx
-109 XbtpLinkGetServiceLocation implemented | console body: clears buffer/len, returns E_NOTIMPL
+109 XbtpLinkGetServiceLocation stub | fixed failure, no work done: console body: clears buffer/len, returns E_NOTIMPL
 110 XbtpLinkGetServiceOptions implemented | console body: *out = 0, S_OK
-111 XbtpLinkGetServiceVersion implemented | console body returns E_NOTIMPL (0x80004001)
+111 XbtpLinkGetServiceVersion stub | fixed failure, no work done: console body returns E_NOTIMPL (0x80004001)
 112 XbtpLinkHandleControl implemented | code 1 set/clear TCP flag 0x100 (rejected once connected), code 2 query, else E_NOTIMPL
 113 XbtpLinkInitializeSystem implemented | once-only state machine, WSAStartup 2.2, epoch FILETIME, cached error
 114 XbtpLinkListen implemented | binds service id, creates wake/ready events and the "XBTP::Accept" thread, returns ready event
 115 XbtpLinkProcessRoutingSocket implemented | QueueUserWorkItem worker: read 0x80, reply GW_C 0xbf000040 with REDIRECT option, read 0x80, shutdown/close
 116 XbtpLinkQueryHandleInformation implemented | class 1 remote addr (16 bytes), class 2 path info (8 bytes), size checks
-117 XbtpLinkQueryPacketLog implemented | console body returns E_NOTIMPL (0x80004001)
-118 XbtpLinkQueryStatistics implemented | console body returns E_NOTIMPL (0x80004001)
+117 XbtpLinkQueryPacketLog stub | fixed failure, no work done: console body returns E_NOTIMPL (0x80004001)
+118 XbtpLinkQueryStatistics stub | fixed failure, no work done: console body returns E_NOTIMPL (0x80004001)
 119 XbtpLinkRecv implemented | device IOCTL 0x22000b or WSARecv, overlapped or blocking
 120 XbtpLinkSend implemented | DATA header 0xfe000001 plus WSABUFs via IOCTL 0x220007 or WSASend; 0x8c110514 size limits
 121 XbtpLinkSetCompletionPort implemented | CreateIoCompletionPort on device handle, HRESULT from GetLastError
 122 XbtpLinkSetRoutingRedirect implemented | resolves sockaddr into global redirect, result ignored, S_OK (console)
-123 XbtpLinkSetServiceOptions implemented | console body returns E_NOTIMPL (0x80004001)
-124 XbtpLinkSetupRoutingLog implemented | console body returns E_NOTIMPL (0x80004001)
+123 XbtpLinkSetServiceOptions stub | fixed failure, no work done: console body returns E_NOTIMPL (0x80004001)
+124 XbtpLinkSetupRoutingLog stub | fixed failure, no work done: console body returns E_NOTIMPL (0x80004001)
 125 XbtpLinkShutdownHandle implemented | sends END 0xfa000005 once (flag 0x80)
 126 XbtpLinkStartRouting implemented | console body returns S_OK
 127 XbtpLinkStopRouting implemented | console body is a bare ret (void)
-128 XbtpOpenSession missing
-129 XbtpOpenSession2 missing
-130 XbtpOpenSessionEx missing
-131 XbtpOpenSessionEx2 missing
-132 XbtpStartDispatcher missing
-133 XbtpStartDispatcherEx missing
+128 XbtpOpenSession implemented | address 'host+key': key after '+' into options.SessionKey (0x58 options), prefix as BSTR; key of 32+ chars -> E_INVALIDARG where console wcscpy_s would raise the invalid-parameter handler (console 0x3470)
+129 XbtpOpenSession2 implemented | GetServerPort (0->0x1073, 1->0x107d, 3->0x1069, top byte kept, else E_INVALIDARG) then Ex2 (console 0x35d0)
+130 XbtpOpenSessionEx implemented | Ex2 with null options (console 0x36f0)
+131 XbtpOpenSessionEx2 implemented | options size 0x58/0x44 else E_INVALIDARG; flags +0x44/+0x48, quiet +0x4c, timeout +0x54 (default 30000); OpenSessionInternal, XbtpSessionImpl QI, SessionHandshake::DoClientHandshake op 0x80000000 (SessionKey/Result/SS) (console 0x3720/0x22bb0)
+132 XbtpStartDispatcher implemented | 0x2b40: XbtpInitialize, GetServerPort(kind 0/1/3 -> 0x1073/0x107d/0x1069 | high byte), StartDispatcherEx, logs "Dispatcher started on port %d"
+133 XbtpStartDispatcherEx implemented | 0x2c90: ppv null E_INVALIDARG; XbtpInitialize; TcpConnection/registry/link InitializeServer(port); dispatcher Initialize; isSystemServer==1 -> DiscoverRegistryExtensions + AddVmNamedPipeEndpoints 0x2860 (SEVPIPE/XtfLoopback/HEVPIPE, stops at first failure, failure only logged); XbtpDispatcherImpl QI(iid,ppv); CreateServiceInfoExtensionMetadata 0x19c44 {206a9d73-95e4-4a5d-93c2-133c3d924600} ops 1 version/2 extension version/3 transport test/5 VMReady via ServiceOperationAdapter 0x18adc; AddExtension; StartRunning 0x13094 thread (E_UNEXPECTED if already running)

@@ -21,6 +21,7 @@ fn w(s: &str) -> Vec<u16> {
 }
 
 #[test]
+#[cfg_attr(not(tombox_backend_data), ignore = "needs crates/compat/compat-common/backend_data")]
 fn wss_xmpp_through_guard_reaches_builtin_server() {
     std::env::set_var("TOMBOX_NET_BACKEND", "builtin");
     std::env::set_var("TOMBOX_NET_TITLE", "fortnite");

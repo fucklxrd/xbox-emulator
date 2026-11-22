@@ -3,6 +3,7 @@ name = "kerneltracecontrol"
 version = "0.1.0"
 edition = "2021"
 license = "MIT OR Apache-2.0"
+build = "build.rs"
 
 [lib]
 name = "kerneltracecontrol"
@@ -10,3 +11,7 @@ crate-type = ["cdylib", "rlib"]
 path = "src/lib.rs"
 
 [dependencies]
+console-image = { path = "../console-image" }
+
+[dev-dependencies]
+xone-exports = { path = "../xone-exports" }

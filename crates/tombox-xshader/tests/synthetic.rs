@@ -54,10 +54,10 @@ fn shader(stage: Stage, words: &[u32], input_sig: Vec<SigElement>, output_sig: V
 #[test]
 fn external_root_signature_binds_a_stripped_mesh_shader() {
     let words = [
-        0xf420_0108, // s_buffer_load_dword s4, s[16:19], 0
+        0xf420_0108,
         0xfa00_0000,
-        0xbefc_0380, // s_mov_b32 m0, 0
-        0xbf90_0009, // s_sendmsg GS_ALLOC_REQ
+        0xbefc_0380,
+        0xbf90_0009,
         S_ENDPGM,
     ];
     let output = vec![sig("SV_Position", 1, 3, 0, 0xf)];
@@ -83,9 +83,9 @@ fn external_root_signature_binds_a_stripped_mesh_shader() {
     assert!(error.contains("base s16 is not a buffer descriptor"), "{error}");
 
     let body = [
-        2u32, 1, 24, 0, 0, 0, // Version 1.1, one parameter at body offset 24
-        2, 0, 36, // Root CBV, all stages, descriptor at body offset 36
-        5, 2, 0, // b5, space2, no descriptor flags
+        2u32, 1, 24, 0, 0, 0,
+        2, 0, 36,
+        5, 2, 0,
     ]
     .map(u32::to_le_bytes)
     .concat();
@@ -275,4 +275,26 @@ fn texel_type_follows_the_use_of_the_loaded_value() {
     let t = translate(&ex).expect("translate (float use)");
     assert!(t.hlsl.contains("Texture2D<float4> tex0 : register(t0);"), "{}", t.hlsl);
     assert!(t.hlsl.contains("float4 t0 = tex0.Load("), "{}", t.hlsl);
+}
+
+#[test]
+fn loops_translate_deterministically() {
+    let mut words = Vec::new();
+    for s in 0..6u32 {
+        words.extend([
+            0xbe80_0384 | s << 16,
+            0x8080_8100 | s << 16 | s,
+            0xbf07_8000 | s,
+            0xbf85_fffd,
+        ]);
+    }
+    words.push(S_ENDPGM);
+    let mut ex = shader(Stage::Compute, &words, vec![], vec![], None);
+    ex.isa_preamble = [0, 1, 1, 1];
+    (ex.has_input_sig, ex.has_output_sig) = (false, false);
+    let first = translate(&ex).expect("translate").hlsl;
+    assert_eq!(first.matches("do {").count(), 6, "{first}");
+    for _ in 0..16 {
+        assert!(translate(&ex).expect("translate").hlsl == first, "translation differs between runs");
+    }
 }

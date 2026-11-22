@@ -43,7 +43,9 @@ pub unsafe fn install(xbox_vt: &[AtomicUsize], real_vt: *const usize) {
     REAL_BARRIER.store(*real_vt.add(26), Ordering::Relaxed);
     xbox_vt[26].store(resource_barrier_x as usize, Ordering::Relaxed);
     crate::cl_ext::install(xbox_vt);
+    crate::cl_fw::install_null_slots(xbox_vt);
     crate::gds::install(xbox_vt);
+    crate::centroid_bind::install(xbox_vt);
     let prev_close = xbox_vt[9].load(Ordering::Relaxed);
     REAL_CLOSE.store(if prev_close != 0 { prev_close } else { *real_vt.add(9) }, Ordering::Relaxed);
     xbox_vt[9].store(close_x as usize, Ordering::Relaxed);
@@ -106,6 +108,7 @@ pub unsafe fn dump_device_messages(dev: *mut c_void, tag: &str) {
 unsafe extern "system" fn close_x(this: *mut c_void) -> i32 {
     let f: unsafe extern "system" fn(*mut c_void) -> i32 = core::mem::transmute(REAL_CLOSE.load(Ordering::Relaxed));
     crate::gds::on_close(this);
+    crate::centroid_bind::on_close(this);
     let hr = f(this);
     crate::gpu_wait::on_close(this);
     if hr < 0 {
@@ -123,7 +126,10 @@ static REAL_BARRIER: AtomicUsize = AtomicUsize::new(0);
 
 unsafe extern "system" fn resource_barrier_x(this: *mut c_void, n: u32, barriers: *const u8) {
     let fixed = crate::xone_barrier::sanitize(n, barriers);
-    let barriers = fixed.as_ref().map_or(barriers, |v| v.as_ptr());
+    let (n, barriers) = fixed.as_ref().map_or((n, barriers), |v| ((v.len() / 32) as u32, v.as_ptr()));
+    if n == 0 {
+        return;
+    }
     crate::gpu_va::note_barriers(n, barriers);
     if crate::rtcap::enabled() {
         crate::rtcap::note_barriers(n, barriers);

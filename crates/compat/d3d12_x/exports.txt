@@ -1,25 +1,25 @@
 1 D3DUploadCustomMicrocode implemented | console validation (all 7 args non-zero else E_INVALIDARG), 0x38-byte packet sent as IOCTL 0x7900c223 to \\.\XgsKmd (or NtDirectGraphicsCall when ntdll provides it); driver failure -> E_FAIL
 2 PixGetPixieEntryPoints implemented | console 0x110-byte table, 29 entries at console offsets, copies min(size,0x110); entries are the console XgsKmd IOCTL wrappers with console validation and status codes
-3 D3D10CreateBlob forwarded | host d3dcompiler_47.dll D3DCreateBlob
-4 D3D12CreateDevice forwarded | host d3d12.dll
-5 D3D12CreateRootSignatureDeserializer forwarded | host d3d12.dll
-6 D3D12CreateVersionedRootSignatureDeserializer forwarded | host d3d12.dll
-7 D3D12GetDebugInterface forwarded | host d3d12.dll
-8 D3D12SerializeRootSignature forwarded | host d3d12.dll
-9 D3D12SerializeVersionedRootSignature forwarded | host d3d12.dll
-10 D3D12XboxCreateDevice forwarded | Xbox One params (0x28 bytes) checked for null, then handed to the emulator's d3d12_xs.dll (Scarlett vtable wrapper, PC slots 0-43 only verified for Xbox One); host D3D12CreateDevice if d3d12_xs is absent
+3 D3D10CreateBlob implemented | code thunk, not a PE forwarder: host d3dcompiler_47.dll D3DCreateBlob
+4 D3D12CreateDevice implemented | console 0x1640: builds the default Xbox One 0x28-byte creation parameters (version 0x1000a, the stored ProcessDebugFlags, -1 at +8/+0x18/+0x1c), ignores the feature level and calls D3D12XboxCreateDevice; rs_strip_tests
+5 D3D12CreateRootSignatureDeserializer implemented | host d3d12.dll on a copy of the blob with the Xbox-only root flags cleared; the bits are put back into the description the deserializer returns; rs_strip_tests
+6 D3D12CreateVersionedRootSignatureDeserializer implemented | as D3D12CreateRootSignatureDeserializer; the bits are put back into GetUnconvertedRootSignatureDesc
+7 D3D12GetDebugInterface implemented | code thunk, not a PE forwarder: host d3d12.dll
+8 D3D12SerializeRootSignature implemented | host d3d12.dll after clearing the Xbox-only root flags (0x01000000, 0x02000000, 0x80000000) from a copy of the description; the bits are put back into the returned RTS0 blob, as d3d12_xs does; rs_strip_tests
+9 D3D12SerializeVersionedRootSignature implemented | as D3D12SerializeRootSignature for the versioned description (flags at +0x28); rs_strip_tests
+10 D3D12XboxCreateDevice implemented | console 0x14b0: NULL parameters -> E_INVALIDARG, *ppDevice cleared, ProcessDebugFlags (+4) stored as the process flags; the 0x28-byte Xbox One parameters are copied into a zeroed 0x48-byte Scarlett block with version 0x20004 (both console runtimes read the same fields at +0..+0x24) and handed to the emulator's d3d12_xs.dll; host D3D12CreateDevice if d3d12_xs is absent; rs_strip_tests::xbox_one_params_translate_to_scarlett_layout
 11 D3D12XboxGetProcessDebugFlags implemented | returns the stored flags
-12 D3D12XboxSetProcessDebugFlags implemented | stores flags & 0x81f00001 like the console runtime
+12 D3D12XboxSetProcessDebugFlags implemented | stores flags & 0x81f00001 like the console runtime (0x1010); D3D12CreateDevice uses them as the creation-parameter flags
 13 D3D12XboxUnloadDriverModule implemented | console 0x16b0: if the driver module is loaded, FreeLibrary it and zero the driver state; devices here are created by the d3d12_xs runtime, which owns that state, so this runs its D3D12XboxUnloadDriverModule when d3d12_xs.dll is loaded
-14 D3DAllocateGraphicsMemory implemented | returns E_NOTIMPL exactly like the console d3d12_x.dll (body is mov eax,0x80004001)
+14 D3DAllocateGraphicsMemory stub | fixed failure, no work done: returns E_NOTIMPL exactly like the console d3d12_x.dll (body is mov eax,0x80004001)
 15 D3DConfigureVirtualMemory implemented | console rules: flags & ~5 -> E_INVALIDARG, >0x21 page-table pages -> debug string + E_INVALIDARG; outputs cleared, XMem config {pages<<22, flag 4 ? 0 : 0xa00000}, returns HRESULT_FROM_NT(STATUS_SUCCESS)
 16 D3DFlushEntireCpuCache implemented | full fence + FlushProcessWriteBuffers: PC CPU-visible heaps are coherent, so draining every core's store buffer is the visible effect of the console cache flush
-17 D3DFreeGraphicsMemory implemented | returns E_NOTIMPL exactly like the console d3d12_x.dll
+17 D3DFreeGraphicsMemory stub | fixed failure, no work done: returns E_NOTIMPL exactly like the console d3d12_x.dll
 18 D3DMapEsramMemory implemented | flags 1/3 only (else E_FAIL, as console); one 32 MiB ESRAM section, each page-list entry maps that 64 KiB ESRAM page at VA+i*64K, so pages alias across VAs and keep contents across remaps; a caller reservation around the range is kept
-19 DXGIXGetFrameStatistics implemented | console returns DXGI_ERROR_UNSUPPORTED (0x887a0004) unconditionally
-20 DXGIXPresentArray implemented | console returns DXGI_ERROR_UNSUPPORTED (0x887a0004) unconditionally
-21 DXGIXSetFrameNotification implemented | console returns DXGI_ERROR_UNSUPPORTED (0x887a0004) unconditionally
-22 DXGIXSetVLineNotification implemented | console returns DXGI_ERROR_UNSUPPORTED (0x887a0004) unconditionally
+19 DXGIXGetFrameStatistics stub | fixed failure, no work done: console returns DXGI_ERROR_UNSUPPORTED (0x887a0004) unconditionally
+20 DXGIXPresentArray stub | fixed failure, no work done: console returns DXGI_ERROR_UNSUPPORTED (0x887a0004) unconditionally
+21 DXGIXSetFrameNotification stub | fixed failure, no work done: console returns DXGI_ERROR_UNSUPPORTED (0x887a0004) unconditionally
+22 DXGIXSetVLineNotification stub | fixed failure, no work done: console returns DXGI_ERROR_UNSUPPORTED (0x887a0004) unconditionally
 23 IID_ID3D12CommandAllocator implemented data
 24 IID_ID3D12CommandList implemented data
 25 IID_ID3D12CommandQueue implemented data

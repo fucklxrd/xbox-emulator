@@ -30,3 +30,23 @@ fn elf_exports_reach_the_advapi32legacy_implementation() {
         assert_eq!(dereg(core::ptr::null_mut()), 0xC000_0008u32 as i32);
     }
 }
+
+#[test]
+fn lsa_password_less_forwarders_reach_the_advapi32legacy_implementation() {
+    let root = std::env::temp_dir().join(format!("tombox-a32-pwdless-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&root);
+    std::env::set_var("TOMBOX_GDK_ROOT", &root);
+    let value = root.join("hklm").join("SOFTWARE").join("Microsoft").join("Windows NT").join("CurrentVersion").join("PasswordLess").join("Device").join("DevicePasswordLessBuildVersion.dword");
+    let (h, legacy) = dlls();
+    unsafe {
+        assert_eq!(proc(h, "LsaEnablePasswordLessCurrentUser"), proc(legacy, "LsaEnablePasswordLessCurrentUser"));
+        assert_eq!(proc(h, "LsaDisablePasswordLessCurrentUser"), proc(legacy, "LsaDisablePasswordLessCurrentUser"));
+        let enable: unsafe extern "system" fn() -> i32 = core::mem::transmute(proc(h, "LsaEnablePasswordLessCurrentUser"));
+        let disable: unsafe extern "system" fn() -> i32 = core::mem::transmute(proc(h, "LsaDisablePasswordLessCurrentUser"));
+        assert_eq!(enable(), 0);
+        assert_eq!(std::fs::read_to_string(&value).unwrap().trim(), "2");
+        assert_eq!(disable(), 0);
+        assert_eq!(std::fs::read_to_string(&value).unwrap().trim(), "0");
+    }
+    let _ = std::fs::remove_dir_all(&root);
+}

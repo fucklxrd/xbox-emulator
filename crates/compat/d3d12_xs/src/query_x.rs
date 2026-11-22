@@ -263,6 +263,7 @@ unsafe fn ones_buffer(list: *mut c_void) -> usize {
 pub unsafe fn install(xbox_vt: &[AtomicUsize], real_vt: *const usize) {
     if std::env::var("TOMBOX_QUERY_HOOKS").map(|v| v == "0").unwrap_or(false) {
         record("d3d12_xs", "query_x", "query hooks disabled by TOMBOX_QUERY_HOOKS=0; Xbox slots 28-31 go straight to PC 52-55");
+        crate::ts99::install_plain_resolve(xbox_vt, XBOX_SLOT_RESOLVE_QUERY_DATA, *real_vt.add(PC_SLOT_RESOLVE_QUERY_DATA));
         return;
     }
     REAL_RESET.store(*real_vt.add(PC_SLOT_RESET), Ordering::Relaxed);
@@ -622,6 +623,7 @@ unsafe extern "system" fn resolve_query_data_x(this: *mut c_void, heap: *mut c_v
     let n = RESOLVES.fetch_add(1, Ordering::Relaxed);
     let f: unsafe extern "system" fn(*mut c_void, *mut c_void, u32, u32, u32, *mut c_void, u64) = core::mem::transmute(REAL_RESOLVE.load(Ordering::Relaxed));
     f(this, heap, ty, start, count, dest, offset);
+    crate::ts99::after_resolve(this, heap, ty, start, count, dest, offset);
     if !is_occlusion(ty) || dest.is_null() {
         return;
     }

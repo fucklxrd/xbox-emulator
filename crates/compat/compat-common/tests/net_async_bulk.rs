@@ -114,6 +114,7 @@ unsafe fn fetch(profile: &str) -> (usize, usize, Duration, Duration) {
 }
 
 #[test]
+#[cfg_attr(not(tombox_backend_data), ignore = "needs crates/compat/compat-common/backend_data")]
 fn large_profile_downloads_quickly_in_small_async_reads() {
     std::env::set_var("TOMBOX_NET_BACKEND", "builtin");
     std::env::set_var("TOMBOX_NET_TITLE", "fortnite");

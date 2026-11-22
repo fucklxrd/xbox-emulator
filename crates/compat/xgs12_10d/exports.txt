@@ -14,8 +14,8 @@
 14 OpenAdapter12 implemented | console returns E_NOTIMPL unconditionally; same here
 15 UMDCreateBlob implemented | native ID3D10Blob (IUnknown/ID3D10Blob QI, underflow-safe Release), object and buffer from the GMemSetAllocationHooks hooks (default XMemAlloc/XMemFree) with the console XMem attributes 0x4800040/0x4800078
 16 UMDCreateDevice12 implemented | console checks (null params/out -> E_INVALIDARG, version >= 0x20001 unless D3D_suppressSdkVersionCheck exists, with the console debug string, 9 accepted device IIDs else E_NOINTERFACE), then the emulator d3d12_xs D3D12XboxCreateDevice; host D3D12CreateDevice when d3d12_xs.dll is not loaded
-17 UMDCreateRootSignatureDeserializer forwarded | host d3d12.dll with the console E_FAIL -> E_INVALIDARG mapping and null-out check
-18 UMDCreateVersionedRootSignatureDeserializer forwarded | host d3d12.dll with the console E_FAIL -> E_INVALIDARG mapping and null-out check
+17 UMDCreateRootSignatureDeserializer implemented | code thunk, not a PE forwarder: host d3d12.dll with the console E_FAIL -> E_INVALIDARG mapping and null-out check
+18 UMDCreateVersionedRootSignatureDeserializer implemented | code thunk, not a PE forwarder: host d3d12.dll with the console E_FAIL -> E_INVALIDARG mapping and null-out check
 19 UMDGetDebugInterface implemented | IID d67441c7 (IDXGIInfoQueue) -> process singleton AddRef + S_OK, other IIDs E_NOTIMPL; native 40-slot IDXGIInfoQueue decoded from xgs12_d: per-producer queues (default limit 0x400, ALL/DX limit rejected with the console DXGI WARNING message + E_INVALIDARG), storage/retrieval filter stacks (newest push among own/DX/ALL wins, APP exempt from DX), size-query S_FALSE, console OutputDebugStringA text, break sets raising exception 0x87a {severity, &id, text}, mute; no PC dxgidebug/SDK layer on this machine to forward to
-20 UMDSerializeRootSignature forwarded | d3d12_xs D3D12SerializeRootSignature (host d3d12.dll) when loaded, else host d3d12.dll
+20 UMDSerializeRootSignature implemented | code thunk, not a PE forwarder: d3d12_xs D3D12SerializeRootSignature (host d3d12.dll) when loaded, else host d3d12.dll
 21 UMDSerializeVersionedRootSignature implemented | console null checks and version 1.0/1.1 gate (other versions: console error-blob text + E_FAIL), serialization forwarded to the d3d12_xs/host serializer

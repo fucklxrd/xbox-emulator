@@ -35,6 +35,7 @@ static XBOX_VT: [AtomicUsize; N] = [const { AtomicUsize::new(0) }; N];
 static BUILT: AtomicBool = AtomicBool::new(false);
 static mut REAL_VT_PTR: *const usize = core::ptr::null();
 static INSERTED_HITS: AtomicUsize = AtomicUsize::new(0);
+pub(crate) const CONSOLE_NULL_SLOT: usize = 66;
 
 pub(crate) unsafe fn real_method(slot: usize) -> usize {
     unsafe { *REAL_VT_PTR.add(slot) }
@@ -370,6 +371,7 @@ pub fn apply(real_list: *mut c_void) {
             REAL_VT_PTR = real_vt;
             install_probes(); // high-slot logging no-op probes (47..95, except 50)
             let console_defaults = crate::console_slots::snapshot(&XBOX_VT);
+            crate::cl_console_fix::install_console_bodies(&XBOX_VT);
             crate::cmdlist_x::install(&XBOX_VT, real_vt);
             crate::query_x::install(&XBOX_VT, real_vt);
             crate::bindtrace::install_root_cbv_hooks(&XBOX_VT, real_vt);
@@ -385,6 +387,11 @@ pub fn apply(real_list: *mut c_void) {
             crate::list_split::install(&XBOX_VT);
             crate::title_heap::install(&XBOX_VT);
             crate::console_slots_mesh::install_cmdlist(&XBOX_VT);
+            crate::perfctr_cl::install(&XBOX_VT);
+            crate::cl_console_fix::install_copy_memory(&XBOX_VT);
+            crate::dbcount::install(&XBOX_VT);
+            crate::cl_console_fix::install_family_tail(&XBOX_VT);
+            XBOX_VT[CONSOLE_NULL_SLOT].store(0, Ordering::Relaxed);
             record("d3d12_xs", "cmdlist.vtable",
                 &format!("built Xbox-layout cmdlist vtable from real {real_vt:p} (+4 shift at PC28)"));
             // Diagnostic: RVAs of the real PC methods inside D3D12Core, to attribute crash frames.

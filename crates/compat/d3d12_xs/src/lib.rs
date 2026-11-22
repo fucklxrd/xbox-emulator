@@ -32,6 +32,7 @@ mod cmdlist_validate;
 mod shader_xlat;
 mod mip_bind;
 mod present;
+mod present_snap;
 mod frame;
 mod frame_fast;
 mod perf;
@@ -61,13 +62,21 @@ mod timestamp;
 mod video_probe;
 mod xs_exports;
 mod console_slots_dev2;
+mod gpu_hw_config;
+mod kmd_slots;
 mod placed_offset;
 mod msaa_place;
 mod gpu_wait;
 mod cl_ext;
+mod dbcount;
+mod cl_fw;
 mod gds;
+pub mod centroid_bind;
 mod list_split;
 mod sys_ts;
+mod ts99;
+mod indirect_bundle;
+mod bop64;
 mod wait_probe;
 #[cfg(test)]
 mod hw_tests;
@@ -77,12 +86,29 @@ mod driver_unload_tests;
 mod title_heap;
 mod mesh_pso;
 mod console_slots_mesh;
+mod cl_console_fix;
+mod device_console_fix;
+mod pso_ext;
 mod global_bind;
 mod kmd10;
 mod dred;
+mod title_shadow;
+pub mod perfctr;
+#[cfg(test)]
+mod perfctr_tests;
+pub mod perfctr_xs;
+#[cfg(test)]
+mod perfctr_xs_tests;
+pub mod perfctr_cl;
+#[cfg(test)]
+mod perfctr_cl_hw;
 pub mod rs_xbox;
 #[cfg(test)]
 mod rs_xbox_tests;
+#[cfg(test)]
+mod slot_audit_tests;
+#[cfg(test)]
+mod create_device_tests;
 
 use core::ffi::c_void;
 use core::sync::atomic::{AtomicUsize, Ordering};
@@ -103,6 +129,7 @@ pub static IID_ID3D12Device: [u8; 16] = [
 ];
 
 const D3D_FEATURE_LEVEL_12_0: u32 = 0xc000;
+pub const E_INVALIDARG: i32 = 0x8007_0057u32 as i32;
 
 /// IID_ID3D12Debug = {344488b7-6846-474b-b989-f027448245e0}
 static IID_ID3D12DEBUG: device_wrap::Guid = device_wrap::Guid {
@@ -186,6 +213,14 @@ pub extern "system" fn D3D12XboxCreateDevice(
     riid: *const c_void,
     pp_device: *mut *mut c_void,
 ) -> i32 {
+    if _params.is_null() {
+        record(M, "D3D12XboxCreateDevice", "NULL creation parameters -> E_INVALIDARG");
+        return E_INVALIDARG;
+    }
+    if !pp_device.is_null() {
+        unsafe { *pp_device = core::ptr::null_mut() };
+    }
+    let _ = xgs_kmd_emu::api();
     present::start_window_clamp();
     agility::select();
     enable_experimental_shader_models();
@@ -222,12 +257,21 @@ pub extern "system" fn D3D12CreateDevice(
     riid: *const c_void,
     pp_device: *mut *mut c_void,
 ) -> i32 {
-    let p = host_proc(b"D3D12CreateDevice\0");
-    if p == 0 { return E_FAIL; }
-    let f: extern "system" fn(*mut c_void, u32, *const c_void, *mut *mut c_void) -> i32 =
-        unsafe { core::mem::transmute(p) };
-    process_debug::mark_device_created();
-    f(adapter, min_feature_level, riid, pp_device)
+    let params = default_create_params(process_debug::current());
+    record(M, "D3D12CreateDevice", &format!("min feature level {min_feature_level:#x} ignored as on console; D3D12XboxCreateDevice with version {:#x} flags {:#010x}", params[0], params[1]));
+    D3D12XboxCreateDevice(adapter, params.as_ptr() as *const c_void, riid, pp_device)
+}
+
+pub const CREATE_PARAMS_VERSION: u32 = 0x20004;
+
+pub fn default_create_params(flags: u32) -> [u32; 18] {
+    let mut p = [0u32; 18];
+    p[0] = CREATE_PARAMS_VERSION;
+    p[1] = flags;
+    p[2] = u32::MAX;
+    p[6] = u32::MAX;
+    p[7] = u32::MAX;
+    p
 }
 
 #[no_mangle]

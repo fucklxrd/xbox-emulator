@@ -40,16 +40,19 @@ fn check(name: &str, want_stage: Stage) {
 }
 
 #[test]
+#[cfg_attr(not(tombox_fixtures_shaders), ignore = "needs analysis/shaders fixtures extracted from local title dumps")]
 fn vertex_shader_extracts_and_decodes() {
     check("fortnite_vs_sample.dxbc", Stage::Vertex);
 }
 
 #[test]
+#[cfg_attr(not(tombox_fixtures_shaders), ignore = "needs analysis/shaders fixtures extracted from local title dumps")]
 fn pixel_shader_extracts_and_decodes() {
     check("fortnite_ps_sample.dxbc", Stage::Pixel);
 }
 
 #[test]
+#[cfg_attr(not(tombox_fixtures_shaders), ignore = "needs analysis/shaders fixtures extracted from local title dumps")]
 fn compute_shader_extracts_and_decodes() {
     check("fortnite_cs_clear.dxbc", Stage::Compute);
     let ex = extract(&fixture("fortnite_cs_clear.dxbc")).unwrap();
@@ -59,6 +62,7 @@ fn compute_shader_extracts_and_decodes() {
 
 /// The HLSL emitter must accept all three real shaders and bind what they actually use.
 #[test]
+#[cfg_attr(not(tombox_fixtures_shaders), ignore = "needs analysis/shaders fixtures extracted from local title dumps")]
 fn fixtures_translate_to_hlsl() {
     use tombox_xshader::hlsl::translate;
     let vs = translate(&extract(&fixture("fortnite_vs_sample.dxbc")).unwrap()).expect("VS");
@@ -76,6 +80,7 @@ fn fixtures_translate_to_hlsl() {
 }
 
 #[test]
+#[cfg_attr(not(tombox_fixtures_shaders), ignore = "needs analysis/shaders fixtures extracted from local title dumps")]
 fn xdefiant_vs_swappc_s4_binds_root_tables() {
     let ex = extract(&fixture("xdefiant_vs_swappc_s4.dxbc")).expect("extract");
     let t = tombox_xshader::hlsl::translate(&ex).expect("translate");
@@ -85,6 +90,7 @@ fn xdefiant_vs_swappc_s4_binds_root_tables() {
     assert!(!t.hlsl.contains("cbuffer CB0 : register(b0)"), "table CBVs fell back to b0:\n{}", t.hlsl);
 }
 #[test]
+#[cfg_attr(not(tombox_fixtures_shaders), ignore = "needs analysis/shaders fixtures extracted from local title dumps")]
 fn xdefiant_ps_position_precedes_front_face() {
     let ex = extract(&fixture("xdefiant_ps_frontface_quad.dxbc")).expect("extract");
     let t = tombox_xshader::hlsl::translate(&ex).expect("translate");

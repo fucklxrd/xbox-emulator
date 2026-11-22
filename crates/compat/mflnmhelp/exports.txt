@@ -6,10 +6,10 @@
 6 GlobalLock implemented | console 0x10f0 (shared with GlobalFree): returns NULL
 7 GlobalUnlock implemented | console 0x1100: returns FALSE
 8 PropVariantToVariant implemented | console 0x12f0 is a bare ret: no memory written, rax passed through
-9 RegDeleteTreeW implemented | console 0x10d0: returns ERROR_CALL_NOT_IMPLEMENTED (0x78)
+9 RegDeleteTreeW stub | fixed failure, no work done: console 0x10d0: returns ERROR_CALL_NOT_IMPLEMENTED (0x78)
 10 RegGetValueW implemented | console 0x1010: RegOpenKeyW for a non-empty subkey, then RegQueryValueExW; dwFlags ignored as on the console
-11 RegNotifyChangeKeyValue implemented | console 0x10c0: returns ERROR_CALL_NOT_IMPLEMENTED (0x78)
-12 VariantChangeType implemented | console 0x12e0: returns E_NOTIMPL
+11 RegNotifyChangeKeyValue stub | fixed failure, no work done: console 0x10c0: returns ERROR_CALL_NOT_IMPLEMENTED (0x78)
+12 VariantChangeType stub | fixed failure, no work done: console 0x12e0: returns E_NOTIMPL
 13 VariantClear implemented | console 0x11a0: releases VT_UNKNOWN/VT_DISPATCH, clears VT_RECORD (RecordClear, Release, XMemFree), E_NOTIMPL for BSTR/CLSID/ARRAY, DISP_E_BADVARTYPE for invalid types
 14 VariantInit implemented | console 0x1190: vt = VT_EMPTY
 15 timeGetTime implemented | console 0x10e0: tail call to GetTickCount

@@ -39,6 +39,7 @@ extern "C" {
     pub fn XbtpCreateJsonObject(out: *mut *mut c_void) -> HRESULT;
     pub fn XbtpCreateJsonArray(out: *mut *mut c_void) -> HRESULT;
     pub fn XbtpGetJsonObjectFromUtf8(utf8: *const u8, out: *mut *mut c_void) -> HRESULT;
+    pub fn XbtpOpenSession2(address: *const u16, server_port: u32, options: *const crate::client::OpenSessionOptions, extension: *const GUID, iid: *const GUID, out: *mut *mut c_void) -> HRESULT;
 }
 
 #[cfg(not(test))]
@@ -73,6 +74,10 @@ mod test_link {
 
     pub unsafe fn XbtpGetJsonObjectFromUtf8(utf8: *const u8, out: *mut *mut c_void) -> HRESULT {
         xbtp::xbtp2_json::XbtpGetJsonObjectFromUtf8(utf8, out)
+    }
+
+    pub unsafe fn XbtpOpenSession2(address: *const u16, server_port: u32, options: *const crate::client::OpenSessionOptions, extension: *const GUID, iid: *const GUID, out: *mut *mut c_void) -> HRESULT {
+        xbtp::api::XbtpOpenSession2(address, server_port, options as *const _, extension as *const _, iid as *const _, out)
     }
 
     pub unsafe fn XGetSystemType() -> u16 {

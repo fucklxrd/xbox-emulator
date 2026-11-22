@@ -8,8 +8,6 @@ use crate::console_slots::{GRAPHICS_VA_HIGH_MASK, WBI_MODE_MARKER_OUT};
 use crate::device_wrap::Guid;
 use crate::gpu_wait::{self, Op};
 
-pub const CL_SET_DB_COUNT_CONTROL: usize = 64;
-pub const CL_SET_PERFECT_ZPASS_COUNTS: usize = 65;
 pub const CL_WRITE32_BOTTOM_OF_PIPE: usize = 69;
 pub const CL_WRITE64_BOTTOM_OF_PIPE: usize = 70;
 pub const CL_WAIT32: usize = 71;
@@ -26,8 +24,8 @@ pub const CL_SET_COMPUTE_LIMITS: usize = 96;
 pub const CL_SET_COMPRESSION_STATE: usize = 97;
 
 #[cfg(test)]
-pub const SLOTS: [usize; 16] = [
-    CL_SET_DB_COUNT_CONTROL, CL_SET_PERFECT_ZPASS_COUNTS, CL_WRITE32_BOTTOM_OF_PIPE, CL_WRITE64_BOTTOM_OF_PIPE,
+pub const SLOTS: [usize; 14] = [
+    CL_WRITE32_BOTTOM_OF_PIPE, CL_WRITE64_BOTTOM_OF_PIPE,
     CL_WAIT32, CL_WAIT64, CL_FORCE_Z_ORDER, CL_EXECUTE_INDIRECT_BUNDLE, CL_SETUP_ORDERED_APPEND, CL_WRITE_GDS,
     CL_READ_GDS, CL_SET_HI_STENCIL, CL_SET_MSAA_PARAMETERS, CL_RECORD_D1, CL_SET_COMPUTE_LIMITS, CL_SET_COMPRESSION_STATE,
 ];
@@ -42,10 +40,6 @@ const RESOURCE_FLAG_ALLOW_DEPTH_STENCIL: u32 = 0x2;
 const FEATURE_OPTIONS2: u32 = 18;
 const IID_DEVICE: Guid =
     Guid { d1: 0x1898_19F1, d2: 0x1DB6, d3: 0x4B57, d4: [0xBE, 0x54, 0x18, 0x21, 0x33, 0x9B, 0x85, 0xF7] };
-
-pub const DB_COUNT_CONTROL_DEFAULT: u32 = 0x1100_0100;
-pub const DB_COUNT_PERFECT_ZPASS: u32 = 0x2;
-pub const DB_COUNT_SAMPLE_RATE_CURRENT: u32 = 0x70;
 
 pub const BOP_FLAG_GPU_TIMESTAMP: u32 = 0x1;
 pub const BOP_FLAG_SYSTEM_TIMESTAMP: u32 = 0x2;
@@ -107,61 +101,6 @@ fn reject(c: &AtomicUsize, what: &str, why: &str) {
     }
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Default)]
-pub struct CountState {
-    pub control: u32,
-    pub custom: bool,
-}
-
-pub fn count_control_set(ctrl: Option<u32>) -> CountState {
-    match ctrl {
-        None => CountState { control: DB_COUNT_CONTROL_DEFAULT, custom: false },
-        Some(v) => CountState { control: v, custom: true },
-    }
-}
-
-pub fn count_control_perfect(s: CountState, perfect: bool) -> CountState {
-    if s.custom {
-        return s;
-    }
-    CountState { control: (s.control & !DB_COUNT_PERFECT_ZPASS) | if perfect { DB_COUNT_PERFECT_ZPASS } else { 0 }, custom: false }
-}
-
-pub fn count_control_matches_pc(control: u32) -> bool {
-    let zpass_disabled = control & 1 != 0;
-    let zpass = (control >> 8) & 0xf;
-    let fail = (control >> 12) & 0xfff;
-    let even = (control >> 24) & 0xf;
-    let odd = (control >> 28) & 0xf;
-    let rate = control & 0x70;
-    !zpass_disabled && zpass != 0 && fail == 0 && even != 0 && odd != 0 && (rate == 0 || rate == DB_COUNT_SAMPLE_RATE_CURRENT)
-}
-
-static COUNT_STATE: Mutex<Option<HashMap<usize, CountState>>> = Mutex::new(None);
-static COUNT_LOG: AtomicUsize = AtomicUsize::new(0);
-
-fn set_count_state(list: usize, s: CountState) {
-    COUNT_STATE.lock().unwrap_or_else(|e| e.into_inner()).get_or_insert_with(HashMap::new).insert(list, s);
-}
-
-pub fn count_state(list: usize) -> CountState {
-    COUNT_STATE.lock().unwrap_or_else(|e| e.into_inner()).as_ref().and_then(|m| m.get(&list).copied()).unwrap_or(CountState { control: DB_COUNT_CONTROL_DEFAULT, custom: false })
-}
-
-unsafe extern "system" fn cl_set_db_count_control(this: *mut c_void, ctrl: *const u32) {
-    let s = count_control_set(if ctrl.is_null() { None } else { Some(unsafe { *ctrl }) });
-    set_count_state(crate::list_split::origin_of(this), s);
-    if !count_control_matches_pc(s.control) && once(&COUNT_LOG, 8) {
-        record("d3d12_xs", "cl_ext", &format!("occlusion counter control {:#010x}: Z-fail/stencil-fail/disabled or fixed-rate counting has no PC equivalent; PC occlusion queries keep counting Z-pass samples", s.control));
-    }
-}
-
-unsafe extern "system" fn cl_set_perfect_zpass_counts(this: *mut c_void, perfect: u32) {
-    let k = crate::list_split::origin_of(this);
-    let s = count_control_perfect(count_state(k), perfect != 0);
-    set_count_state(k, s);
-}
-
 pub fn bop_error(flush: u32, flags: u32, is64: bool, value: u64) -> Option<&'static str> {
     if flags & BOP_FLAGS_INVALID != 0 {
         return Some("invalid flags");
@@ -199,19 +138,7 @@ unsafe extern "system" fn cl_write32_bottom_of_pipe(this: *mut c_void, va: u64, 
 }
 
 unsafe extern "system" fn cl_write64_bottom_of_pipe(this: *mut c_void, va: u64, value: u64, flush: u32, flags: u32) {
-    const W: &str = "Write64BitValueBottomOfPipeX";
-    if unsafe { list_type(this) } != LIST_TYPE_DIRECT {
-        return reject(&BOP_LOG, W, "pCommandList is not of type DIRECT");
-    }
-    if let Some(e) = bop_error(flush, flags, true, value) {
-        return reject(&BOP_LOG, W, e);
-    }
-    match bop64_route(va, flags) {
-        Err(e) => reject(&BOP_LOG, W, e),
-        Ok(Bop64::GpuTimestamp) => unsafe { crate::timestamp::write(this, false, va, flags, flush, 0) },
-        Ok(Bop64::SystemTimestamp) => unsafe { crate::sys_ts::write(this, va) },
-        Ok(Bop64::Value) => unsafe { crate::console_slots::write_immediate(this, va, &[value as u32, (value >> 32) as u32], WBI_MODE_MARKER_OUT, W) },
-    }
+    unsafe { crate::bop64::write64(this, va, value, flush, flags) }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -316,58 +243,21 @@ pub fn bundle_error(bundle_width: Option<u64>, offset: u64, max_size: u32, size_
 }
 
 static BUNDLE_LOG: AtomicUsize = AtomicUsize::new(0);
-const PC_SLOT_EXECUTE_BUNDLE: usize = 27;
 
-#[derive(Clone, Copy, Debug, PartialEq)]
-pub enum BundlePlan {
-    Execute(usize),
-    GpuSize,
-    NotDirect,
-    NoRecord,
-    TooLarge,
-}
-
-pub fn bundle_plan(list_type: u32, has_size_buffer: bool, rec: Option<crate::console_slots_cl2::BundleRecord>, registered: Option<usize>, max_size: u32) -> BundlePlan {
-    if has_size_buffer {
-        return BundlePlan::GpuSize;
-    }
-    if list_type != LIST_TYPE_DIRECT {
-        return BundlePlan::NotDirect;
-    }
-    match (rec, registered) {
-        (Some(r), Some(b)) if r.magic == crate::console_slots_cl2::BUNDLE_RECORD_MAGIC && r.bundle == b as u64 => {
-            if r.size > max_size { BundlePlan::TooLarge } else { BundlePlan::Execute(b) }
-        }
-        _ => BundlePlan::NoRecord,
-    }
+pub fn bundle_list_error(list_type: u32) -> Option<&'static str> {
+    (list_type != LIST_TYPE_DIRECT).then_some("Cannot be performed on a compute command list.")
 }
 
 unsafe extern "system" fn cl_execute_indirect_bundle(this: *mut c_void, bundle: *mut c_void, offset: u64, max_size: u32, size_buf: *mut c_void, size_off: u32, pred_off: u32) {
     const W: &str = "ExecuteIndirectBundleX";
+    let offset = offset as u32 as u64;
     let bw = unsafe { res_desc(bundle) }.map(|d| desc_width(&d));
     let sw = unsafe { res_desc(size_buf) }.map(|d| desc_width(&d));
     let ty = unsafe { list_type(this) };
-    if let Some(e) = bundle_error(bw, offset, max_size, sw, size_off, ty, pred_off) {
+    if let Some(e) = bundle_error(bw, offset, max_size, sw, size_off, ty, pred_off).or_else(|| bundle_list_error(ty)) {
         return reject(&BUNDLE_LOG, W, e);
     }
-    let addr = crate::placed::lookup(bundle).map(|p| (p.va + offset) as usize);
-    let rec = addr.map(|a| unsafe { core::ptr::read_unaligned(a as *const crate::console_slots_cl2::BundleRecord) });
-    let registered = addr.and_then(crate::console_slots_cl2::bundle_for_buffer);
-    let why = match bundle_plan(ty, !size_buf.is_null(), rec, registered, max_size) {
-        BundlePlan::Execute(b) => {
-            let f: unsafe extern "system" fn(*mut c_void, *mut c_void) = unsafe { core::mem::transmute(pc_fn(this, PC_SLOT_EXECUTE_BUNDLE)) };
-            unsafe { f(this, b as *mut c_void) };
-            unsafe { crate::cl2_state::after_bundle(this, b as *mut c_void) };
-            return;
-        }
-        BundlePlan::GpuSize => "the executed size is read from pSizeBuffer by the CP at execution time; PC ExecuteBundle has no GPU-sourced size",
-        BundlePlan::NotDirect => "PC ExecuteBundle is only legal on DIRECT lists",
-        BundlePlan::NoRecord => "the buffer does not hold a CloseBundleX record written by this emulator (raw console bundle packets have no PC equivalent)",
-        BundlePlan::TooLarge => "the bundle execution size exceeds MaxSize",
-    };
-    if once(&BUNDLE_LOG, 8) {
-        record("d3d12_xs", "cl_ext", &format!("{W} bundle={bundle:p}+{offset:#x} max={max_size:#x} size={size_buf:p}+{size_off:#x}: {why}; not executed"));
-    }
+    unsafe { crate::indirect_bundle::execute(this, bundle, bw.unwrap_or(0), offset, max_size, size_buf, size_off) };
 }
 
 pub fn ordered_append_error(index: u32, gds_dword: u32, stage: u32, reserved: u32) -> Option<&'static str> {
@@ -467,11 +357,11 @@ unsafe extern "system" fn cl_set_hi_stencil(_this: *mut c_void, res: *mut c_void
 
 pub fn sample_positions_error(pos: &[u8; 128], config: Option<[u32; 2]>) -> Option<&'static str> {
     if pos.iter().any(|&b| !(-8..=7).contains(&(b as i8))) {
-        return Some("sample positions must be signed integers in [-8..7]");
+        return Some("Invalid value encountered in D3D11X_MSAA_SAMPLE_POSITIONS. Values should be signed integers in [-8..7] range.");
     }
     if let Some(c) = config {
         if c[1] & 0x22000 != 0 {
-            return Some("reserved fields must be zero");
+            return Some("Reserved fields must be zero");
         }
         if c[0] & 0xc00 == 0xc00 {
             return Some("DetailToExposedMode can't take the value of 3");
@@ -493,6 +383,10 @@ pub fn pc_sample_positions(pos: &[u8; 128], samples: u32, pixels: u32) -> Vec<[i
         }
     }
     v
+}
+
+pub fn masked_sample_positions(pos: &[u8; 128]) -> [u8; 128] {
+    core::array::from_fn(|i| (((pos[i] << 4) as i8) >> 4) as u8)
 }
 
 pub fn quad_is_uniform(pos: &[u8; 128], samples: u32) -> bool {
@@ -529,12 +423,16 @@ unsafe extern "system" fn cl_set_msaa_parameters(this: *mut c_void, pos: *const 
     const W: &str = "RSSetMSAAParametersX";
     let cfg = if config.is_null() { None } else { Some(unsafe { *config }) };
     let zero = [0u8; 128];
-    let p = if pos.is_null() { &zero } else { unsafe { &*pos } };
-    if let Some(e) = sample_positions_error(p, cfg) {
-        return reject(&MSAA_LOG, W, e);
+    let raw = if pos.is_null() { &zero } else { unsafe { &*pos } };
+    if let Some(e) = sample_positions_error(raw, cfg) {
+        if once(&MSAA_LOG, 8) {
+            record("d3d12_xs", "cl_ext", &format!("{W}: {e} (xgs12_d message); applied with the register nibble masking as xgs12 does"));
+        }
     }
+    let masked = masked_sample_positions(raw);
+    let p = &masked;
     if unsafe { list_type(this) } == LIST_TYPE_BUNDLE {
-        return reject(&MSAA_LOG, W, "this API can't be used on a draw bundle list");
+        return reject(&MSAA_LOG, W, "This API can't be used on a draw bundle list; the host forbids SetSamplePositions in bundles");
     }
     let key = crate::list_split::origin_of(this);
     let samples = {
@@ -545,13 +443,13 @@ unsafe extern "system" fn cl_set_msaa_parameters(this: *mut c_void, pos: *const 
         }
         m.get(&key).copied()
     };
-    if !centroid.is_null() && once(&MSAA_LOG, 4) {
-        record("d3d12_xs", "cl_ext", &format!("{W}: centroid priority {:02x?} has no PC control; the PC rasterizer picks centroid samples itself", unsafe { *centroid }));
+    if !centroid.is_null() {
+        unsafe { crate::centroid_bind::on_msaa(this, Some(*centroid), None) };
     }
     if pos.is_null() {
         return;
     }
-    let Some(n) = samples.filter(|&n| n > 1) else {
+    let Some(n) = samples.filter(|&n| (2..=16).contains(&n)) else {
         if once(&MSAA_LOG, 8) {
             record("d3d12_xs", "cl_ext", &format!("{W}: sample positions without a known MSAA sample count for this list; positions not applied"));
         }
@@ -568,14 +466,7 @@ unsafe extern "system" fn cl_set_msaa_parameters(this: *mut c_void, pos: *const 
     let v = pc_sample_positions(p, n, pixels);
     let f: unsafe extern "system" fn(*mut c_void, u32, u32, *const [i8; 2]) = unsafe { core::mem::transmute(pc_fn(this, PC_SLOT_SET_SAMPLE_POSITIONS)) };
     unsafe { f(this, n, pixels, v.as_ptr()) };
-}
-
-static D1_LOG: AtomicUsize = AtomicUsize::new(0);
-
-unsafe extern "system" fn cl_record_d1(this: *mut c_void) {
-    if once(&D1_LOG, 4) {
-        record("d3d12_xs", "cl_ext", &format!("command-list slot 86 on {this:p}: the console UMD only appends deferred record 0x4000d100 for the CP firmware; its meaning is not in the UMD, not recorded"));
-    }
+    unsafe { crate::centroid_bind::on_msaa(this, None, Some((*p, n))) };
 }
 
 pub fn compute_limits_error(d: &[u32; 6]) -> Option<&'static str> {
@@ -680,8 +571,6 @@ unsafe extern "system" fn cl_set_compression_state(this: *mut c_void, res: *mut 
 
 pub fn plan() -> Vec<(usize, usize)> {
     vec![
-        (CL_SET_DB_COUNT_CONTROL, cl_set_db_count_control as usize),
-        (CL_SET_PERFECT_ZPASS_COUNTS, cl_set_perfect_zpass_counts as usize),
         (CL_WRITE32_BOTTOM_OF_PIPE, cl_write32_bottom_of_pipe as usize),
         (CL_WRITE64_BOTTOM_OF_PIPE, cl_write64_bottom_of_pipe as usize),
         (CL_WAIT32, cl_wait32 as usize),
@@ -693,7 +582,7 @@ pub fn plan() -> Vec<(usize, usize)> {
         (CL_READ_GDS, cl_read_gds as usize),
         (CL_SET_HI_STENCIL, cl_set_hi_stencil as usize),
         (CL_SET_MSAA_PARAMETERS, cl_set_msaa_parameters as usize),
-        (CL_RECORD_D1, cl_record_d1 as usize),
+        (CL_RECORD_D1, crate::cl_fw::advance_predication as usize),
         (CL_SET_COMPUTE_LIMITS, cl_set_compute_limits as usize),
         (CL_SET_COMPRESSION_STATE, cl_set_compression_state as usize),
     ]
@@ -725,22 +614,6 @@ mod tests {
         assert_eq!(vt[CL_WAIT64].load(Ordering::Relaxed), cl_wait64 as usize);
         assert_eq!(vt[81].load(Ordering::Relaxed), 0);
         assert_eq!(vt[78].load(Ordering::Relaxed), 0);
-    }
-
-    #[test]
-    fn db_count_control_follows_the_umd() {
-        let d = count_control_set(None);
-        assert_eq!(d, CountState { control: 0x1100_0100, custom: false });
-        assert!(count_control_matches_pc(d.control));
-        assert_eq!(count_control_perfect(d, true).control, 0x1100_0102);
-        assert_eq!(count_control_perfect(count_control_perfect(d, true), false).control, 0x1100_0100);
-        let c = count_control_set(Some(0x1100_1000));
-        assert_eq!(count_control_perfect(c, true), c);
-        assert!(!count_control_matches_pc(0x1100_1000));
-        assert!(!count_control_matches_pc(0x1100_0101));
-        assert!(!count_control_matches_pc(0x0100_0100));
-        assert!(count_control_matches_pc(0x1100_0172));
-        assert!(!count_control_matches_pc(0x1100_0130));
     }
 
     #[test]
@@ -826,6 +699,15 @@ mod tests {
         let mut bad = pos;
         bad[5] = 8;
         assert!(sample_positions_error(&bad, None).is_some());
+        assert_eq!(masked_sample_positions(&pos), pos);
+        let mut wide = pos;
+        wide[0] = 9;
+        wide[1] = 0x17;
+        wide[2] = 0xf0;
+        assert!(sample_positions_error(&wide, None).is_some());
+        let m = masked_sample_positions(&wide);
+        assert_eq!(sample_positions_error(&m, None), None);
+        assert_eq!(pc_sample_positions(&m, 2, 1), vec![[-7, 7], [0, -4]]);
         assert!(sample_positions_error(&pos, Some([0xc00, 0])).is_some());
         assert!(sample_positions_error(&pos, Some([0, 0x2000])).is_some());
     }
@@ -935,7 +817,7 @@ mod tests {
             cl_force_z_order(p, 1);
             cl_write32_bottom_of_pipe(p, 0x1000, 1, 0, 0);
             cl_write64_bottom_of_pipe(p, 0x1000, 1, 0, 0);
-            cl_record_d1(p);
+            crate::cl_fw::advance_predication(p);
             cl_set_hi_stencil(p, core::ptr::null_mut(), core::ptr::null());
         }
         gpu_wait::on_close(p);
@@ -983,16 +865,11 @@ mod tests {
     }
 
     #[test]
-    fn execute_indirect_bundle_runs_emulator_bundle_records() {
-        use crate::console_slots_cl2::{BundleRecord, BUNDLE_RECORD_MAGIC};
-        let rec = BundleRecord { magic: BUNDLE_RECORD_MAGIC, size: 16, bundle: 0x7000 };
-        assert_eq!(bundle_plan(0, false, Some(rec), Some(0x7000), 16), BundlePlan::Execute(0x7000));
-        assert_eq!(bundle_plan(0, false, Some(rec), Some(0x7000), 8), BundlePlan::TooLarge);
-        assert_eq!(bundle_plan(0, false, Some(rec), Some(0x7008), 16), BundlePlan::NoRecord);
-        assert_eq!(bundle_plan(0, false, Some(BundleRecord { magic: 0, ..rec }), Some(0x7000), 16), BundlePlan::NoRecord);
-        assert_eq!(bundle_plan(0, false, None, None, 16), BundlePlan::NoRecord);
-        assert_eq!(bundle_plan(2, false, Some(rec), Some(0x7000), 16), BundlePlan::NotDirect);
-        assert_eq!(bundle_plan(0, true, Some(rec), Some(0x7000), 16), BundlePlan::GpuSize);
+    fn execute_indirect_bundle_runs_only_on_direct_lists() {
+        assert_eq!(bundle_list_error(LIST_TYPE_DIRECT), None);
+        assert!(bundle_list_error(2).is_some());
+        assert!(bundle_list_error(3).is_some());
+        assert!(bundle_error(Some(0x100), 0, 0x40, None, 0, LIST_TYPE_BUNDLE, 0).is_some());
     }
 
     #[test]

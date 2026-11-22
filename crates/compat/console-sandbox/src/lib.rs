@@ -2,6 +2,7 @@ use std::path::PathBuf;
 
 use compat_common::os_host::patch::{patch_image, Hook};
 
+pub mod claims;
 pub mod fs;
 pub mod hive;
 pub mod modules;
@@ -10,9 +11,12 @@ pub mod regnt;
 pub mod rpc;
 pub mod wnf;
 pub mod host;
+pub mod notify;
 pub mod registry;
+pub mod regw;
 pub mod system;
 pub mod wstr;
+pub mod xvcmgmt;
 
 #[link(name = "ntdll")]
 extern "system" {
@@ -27,6 +31,9 @@ unsafe extern "system" fn nt_close(h: usize) -> i32 {
     if registry::close(h) {
         0
     } else {
+        if xvcmgmt::is_device(h) {
+            xvcmgmt::forget(h);
+        }
         NtClose(h)
     }
 }
@@ -71,6 +78,14 @@ pub fn hooks() -> Vec<Hook> {
         hook!("NtDeleteValueKey", NTDLL, regnt::nt_delete_value_key),
         hook!("ZwDeleteValueKey", NTDLL, regnt::nt_delete_value_key),
         hook!("ZwFlushKey", NTDLL, registry::nt_flush_key),
+        hook!("NtOpenFile", NTDLL, xvcmgmt::nt_open_file),
+        hook!("ZwOpenFile", NTDLL, xvcmgmt::nt_open_file),
+        hook!("NtCreateFile", NTDLL, xvcmgmt::nt_create_file),
+        hook!("ZwCreateFile", NTDLL, xvcmgmt::nt_create_file),
+        hook!("NtDeviceIoControlFile", NTDLL, xvcmgmt::nt_device_io_control_file),
+        hook!("ZwDeviceIoControlFile", NTDLL, xvcmgmt::nt_device_io_control_file),
+        hook!("NtQueryInformationToken", NTDLL, claims::nt_query_information_token),
+        hook!("ZwQueryInformationToken", NTDLL, claims::nt_query_information_token),
         hook!("NtCreateWnfStateName", NTDLL, wnf::nt_create_wnf_state_name),
         hook!("ZwCreateWnfStateName", NTDLL, wnf::nt_create_wnf_state_name),
         hook!("NtDeleteWnfStateName", NTDLL, wnf::nt_delete_wnf_state_name),
@@ -107,7 +122,13 @@ pub fn hooks() -> Vec<Hook> {
         hook!("RegGetValueW", REG, registry::reg_get_value_w),
         hook!("RegQueryInfoKeyW", REG, registry::reg_query_info_key_w),
         hook!("RegEnumValueW", REG, registry::reg_enum_value_w),
+        hook!("RegQueryValueExW", REG, regw::reg_query_value_ex_w),
+        hook!("RegEnumKeyExW", REG, regw::reg_enum_key_ex_w),
+        hook!("RegEnumKeyW", REG, regw::reg_enum_key_w),
+        hook!("RegDeleteValueW", REG, regw::reg_delete_value_w),
+        hook!("RegDeleteKeyW", REG, regw::reg_delete_key_w),
         hook!("CreateFileW", FILE, fs::create_file_w),
+        hook!("DeviceIoControl", &["api-ms-win-core-io-", "kernelbase", "kernel32"], xvcmgmt::device_io_control),
         hook!("GetFileAttributesW", FILE, fs::get_file_attributes_w),
         hook!("DeleteFileW", FILE, fs::delete_file_w),
         hook!("SetFileInformationByHandle", FILE, fs::set_file_information_by_handle),
@@ -122,6 +143,10 @@ pub fn hooks() -> Vec<Hook> {
         hook!("SetServiceStatus", SERVICE, host::set_service_status),
         hook!("OpenSCManagerW", SERVICE, host::open_sc_manager_w),
         hook!("OpenServiceW", SERVICE, host::open_service_w),
+        hook!("OpenSCManagerA", SERVICE, notify::open_sc_manager_a),
+        hook!("OpenServiceA", SERVICE, notify::open_service_a),
+        hook!("NotifyServiceStatusChangeA", SERVICE, notify::notify_service_status_change),
+        hook!("NotifyServiceStatusChangeW", SERVICE, notify::notify_service_status_change),
         hook!("CloseServiceHandle", SERVICE, host::close_service_handle),
         hook!("QueryServiceStatusEx", SERVICE, host::query_service_status_ex),
         hook!("QueryServiceConfigW", SERVICE, host::query_service_config_w),

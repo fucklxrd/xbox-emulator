@@ -1,8 +1,8 @@
-1 XFrontPanelGetButtonStates implemented | emulated panel buttons (F1-F5 = buttons 1-5, arrows, Enter = select while the panel window has focus)
-2 XFrontPanelGetLightStates implemented | returns the 5 light bits last set
+1 XFrontPanelGetButtonStates implemented | console 0x1030: XfpTryConnect, on failure returns a second XfpTryConnect result, else XfpGetKeyState(out) via xfp_gc.dll (no null check, as on console)
+2 XFrontPanelGetLightStates implemented | console 0x1070: E_INVALIDARG on null, zeroes out, XfpTryConnect then XfpGetLEDState; LED bits 15/13/1/11/9 map to lights 1/2/4/8/0x10; failures return the retried call
 3 XFrontPanelGetScreenDimensions implemented | 64 x 256, E_INVALIDARG on null (matches console)
 4 XFrontPanelGetScreenPixelFormat implemented | DXGI_FORMAT_R8_UNORM (0x3d) as on console
 5 XFrontPanelIsSupported implemented | console 0x1220: SUCCEEDED(XFP_GC!XfpTryConnect()); here the compat xfp_gc.dll XfpTryConnect, so true only when its XFP pipe connects and grants
-6 XFrontPanelPresentBuffer implemented | console validation (size 0x4000 else E_INVALIDARG, null E_POINTER); frame kept and drawn in a 768x192 panel window (TOMBOX_FRONTPANEL=0 hides it)
+6 XFrontPanelPresentBuffer implemented | console 0x1200: size 0x4000 else E_INVALIDARG, null E_POINTER, XfpTryConnect, then XfpSetDisplayBuffer(buf, 8); the frame is mirrored to the 768x192 panel window only after it was sent (TOMBOX_FRONTPANEL=0 hides it)
 7 XFrontPanelSetDisplayName implemented | E_INVALIDARG on null as on console; name logged and shown in the panel window title
-8 XFrontPanelSetLightStates implemented | keeps lights & 0x1f, drawn under the panel, changes logged
+8 XFrontPanelSetLightStates implemented | console 0x1100: lights 1/2/4/8/0x10 packed to LED bits 15/13/1/11/9, XfpTryConnect (failure returns the retried connect), then XfpSetLEDState

@@ -1,7 +1,5 @@
 use core::ffi::c_void;
 use core::sync::atomic::{AtomicUsize, Ordering};
-use std::collections::HashMap;
-use std::sync::Mutex;
 use compat_common::record;
 
 use crate::device_wrap::{real_device, Guid};
@@ -100,23 +98,12 @@ pub struct KmdInfo {
 }
 
 pub fn kmd_info(device_type: u32) -> KmdInfo {
-    let (mode, compute_units) = match device_type {
-        2 | 3 => (0, 12),
-        4 => (1, 40),
-        5 => (1, 44),
-        6 => (1, 20),
-        _ => (2, 52),
-    };
-    KmdInfo { word0: 0, mode, compute_units }
+    let g = xgs_kmd_emu::gpu_info(device_type);
+    KmdInfo { word0: g.frequency_hz, mode: g.mode, compute_units: g.compute_units }
 }
 
 pub fn kmd_reply(device_type: u32) -> [u8; 16] {
-    let k = kmd_info(device_type);
-    let mut r = [0u8; 16];
-    r[0..8].copy_from_slice(&k.word0.to_le_bytes());
-    r[8..12].copy_from_slice(&k.mode.to_le_bytes());
-    r[12..16].copy_from_slice(&k.compute_units.to_le_bytes());
-    r
+    xgs_kmd_emu::gpu_reply(device_type)
 }
 
 pub fn console_info(fam: Family, device_type: u32) -> [u8; 16] {
@@ -142,29 +129,20 @@ unsafe extern "system" fn console_info_x(_this: *mut c_void, out: *mut [u8; 16])
     }
 }
 
-fn driver_levels() -> &'static Mutex<HashMap<usize, u32>> {
-    static M: std::sync::OnceLock<Mutex<HashMap<usize, u32>>> = std::sync::OnceLock::new();
-    M.get_or_init(|| Mutex::new(HashMap::new()))
-}
-
-pub fn set_driver_level(dev: usize, v: u32) -> i32 {
-    if !(5..=10).contains(&v) {
-        return E_INVALIDARG;
-    }
-    driver_levels().lock().unwrap_or_else(|e| e.into_inner()).insert(dev, v);
-    S_OK
+pub fn set_driver_level(_dev: usize, v: u32) -> i32 {
+    crate::kmd_slots::set_driver_level(v)
 }
 
 #[allow(dead_code)]
-pub fn driver_level(dev: usize) -> Option<u32> {
-    driver_levels().lock().unwrap_or_else(|e| e.into_inner()).get(&dev).copied()
+pub fn driver_level(_dev: usize) -> Option<u32> {
+    crate::kmd_slots::driver_level()
 }
 
 unsafe extern "system" fn driver_level_x(this: *mut c_void, v: u32) -> i32 {
     static N: AtomicUsize = AtomicUsize::new(0);
     let hr = set_driver_level(this as usize, v);
     if hr != S_OK || once(&N, 8) {
-        record("d3d12_xs", "device72", &format!("value {v} -> {hr:#010x} (release driver sends it with IOCTL 0x7900c1f8; 5..10 accepted)"));
+        record("d3d12_xs", "device72", &format!("value {v} -> {hr:#010x} (IOCTL 0x7900c1f8 on the emulated KMD; 5..10 accepted)"));
     }
     hr
 }
@@ -671,7 +649,7 @@ mod tests {
     #[test]
     fn console_info_layout() {
         let i = console_info(Family::Scarlett, 7);
-        assert_eq!(&i[0..8], &[0; 8]);
+        assert_eq!(&i[0..8], &1_825_000_000u64.to_le_bytes());
         assert_eq!(u32::from_le_bytes(i[8..12].try_into().unwrap()), 5);
         assert_eq!(&i[12..16], &[0; 4]);
         let x = console_info(Family::XboxOne, 4);
@@ -686,15 +664,15 @@ mod tests {
         assert_eq!([cu(2), cu(3), cu(4), cu(5), cu(6), cu(7), cu(8)], [12, 12, 40, 44, 20, 52, 52]);
         assert_eq!([mode(2), mode(3), mode(4), mode(5)], [0, 0, 1, 1]);
         assert_eq!([mode(6), mode(7), mode(8)], [1, 2, 2]);
-        assert_eq!(&kmd_reply(7)[0..8], &[0; 8]);
+        assert_eq!(&kmd_reply(7)[0..8], &1_825_000_000u64.to_le_bytes());
     }
 
     #[test]
     fn driver_level_range() {
+        let _g = crate::kmd_slots::test_serial();
         for v in [0, 4, 11, 0xffff_ffff] {
             assert_eq!(set_driver_level(0x1234, v), E_INVALIDARG);
         }
-        assert_eq!(driver_level(0x1234), None);
         for v in 5..=10 {
             assert_eq!(set_driver_level(0x1234, v), S_OK);
             assert_eq!(driver_level(0x1234), Some(v));
@@ -856,6 +834,7 @@ mod tests {
 
     #[test]
     fn device72_hook_validates() {
+        let _g = crate::kmd_slots::test_serial();
         let dev = 0x5555usize as *mut c_void;
         assert_eq!(unsafe { driver_level_x(dev, 11) }, E_INVALIDARG);
         assert_eq!(unsafe { driver_level_x(dev, 6) }, S_OK);

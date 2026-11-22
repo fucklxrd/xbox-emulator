@@ -1,6 +1,3 @@
-//! Synthetic inputs for the integration tests. Install FFmpeg with libx264 or
-//! set TOMBOX_FFMPEG to an executable with that encoder.
-
 #![allow(dead_code)]
 
 use std::io::ErrorKind;

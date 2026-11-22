@@ -150,8 +150,8 @@ pub unsafe extern "system" fn XMemGetWorkingSetStatistics(flags: u32, out: *mut 
             wr(o, 0x20, ws.flags);
             wr(o, 0x28, ws.commit_total);
             wr(o, 0x30, ws.commit_used);
-            wr(o, 0x48, ws.control_page);
-            wr(o, 0x4c, ws.reserved1);
+            wr(o, 0x48, ws.pool_bytes);
+            wr(o, 0x4c, ws.commit_limit);
         }
         _ => {
             core::ptr::write_bytes(o, 0, 0x48);
@@ -160,7 +160,7 @@ pub unsafe extern "system" fn XMemGetWorkingSetStatistics(flags: u32, out: *mut 
             wr(o, 0x10, ws.tools_total);
             wr(o, 0x18, ws.tools_available);
             wr(o, 0x20, ws.flags);
-            wr(o, 0x24, ws.control_page);
+            wr(o, 0x24, ws.pool_bytes);
             wr(o, 0x28, ws.commit_total);
             wr(o, 0x30, ws.commit_used);
         }
@@ -393,6 +393,21 @@ mod tests {
     }
 
     #[test]
+    fn series_x_title_partition_size() {
+        assert_eq!(TITLE_LIMIT, 13 * (1 << 30) + (1 << 29));
+        assert_eq!(TITLE_LIMIT >> 30, 13);
+        assert_eq!((TITLE_LIMIT + (1 << 30) - 1) >> 30, 14);
+        let mut v2 = [0u8; 0x50];
+        assert_eq!(unsafe { XMemGetWorkingSetStatistics(0x1000_0001, v2.as_mut_ptr() as *mut c_void) }, 1);
+        let total = u64::from_le_bytes(v2[0..8].try_into().unwrap());
+        let used = u64::from_le_bytes(v2[8..16].try_into().unwrap());
+        assert_eq!(total, 14_495_514_624);
+        assert_eq!(u64::from_le_bytes(v2[0x28..0x30].try_into().unwrap()), total);
+        assert_eq!(u64::from_le_bytes(v2[0x30..0x38].try_into().unwrap()), used);
+        assert!(used > 0 && used <= total);
+    }
+
+    #[test]
     fn page_statistics_are_consistent() {
         let mut f = FreePageStatistics::default();
         assert_eq!(unsafe { XMemGetFreePageStatistics(&mut f) }, 1);
@@ -428,7 +443,14 @@ mod tests {
         assert_eq!(u32::from_le_bytes(ws[0x4c..0x50].try_into().unwrap()), before.wrapping_add(0x30_0000));
         let mut v2 = [0xccu8; 0x50];
         assert_eq!(unsafe { XMemGetWorkingSetStatistics(WS_VERSION_2 | WS_POOL, v2.as_mut_ptr() as *mut c_void) }, 1);
-        assert!(v2.iter().all(|&b| b == 0));
+        assert_ne!(u32::from_le_bytes(v2[0x48..0x4c].try_into().unwrap()), 0xcccc_cccc);
+        assert_ne!(u32::from_le_bytes(v2[0x48..0x4c].try_into().unwrap()), 0);
+        assert_eq!(u32::from_le_bytes(v2[0x4c..0x50].try_into().unwrap()), before.wrapping_add(0x30_0000));
+        assert!(v2[..0x48].iter().all(|&b| b == 0));
+        let mut old = [0xccu8; 0x48];
+        assert_eq!(unsafe { XMemGetWorkingSetStatistics(WS_POOL, old.as_mut_ptr() as *mut c_void) }, 1);
+        assert_ne!(u32::from_le_bytes(old[0x24..0x28].try_into().unwrap()), 0);
+        assert_ne!(u32::from_le_bytes(old[0x24..0x28].try_into().unwrap()), 0xcccc_cccc);
         assert_eq!(transfer_pages(0x30_0000), 0x400);
         assert_eq!(transfer_pages(1), 0x200);
         assert_eq!(transfer_pages(0x20_0000), 0x200);

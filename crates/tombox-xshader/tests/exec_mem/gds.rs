@@ -102,7 +102,12 @@ fn init() -> Vec<u32> {
 }
 
 const BASE: u32 = 0x100;
+const SIZE: u32 = 0x1000;
 const OFF: u32 = 8;
+
+fn m0(base: u32, size: u32) -> u32 {
+    base << 16 | size
+}
 
 fn slot(t: u32) -> usize {
     ((BASE + t * 4 + OFF) / 4) as usize
@@ -143,7 +148,7 @@ fn ds_gds_atomics() {
                 continue;
             }
             let code = if rtn { op + 0x20 } else { op };
-            let words = prog(BASE, &gds_op(code, OFF, 1, 2, 4, 10), &[10]);
+            let words = prog(m0(BASE, SIZE), &gds_op(code, OFF, 1, 2, 4, 10), &[10]);
             let name = if rtn { m.replacen("_u32", "_rtn_u32", 1).replacen("_i32", "_rtn_i32", 1).replacen("_b32", "_rtn_b32", 1) } else { m.to_string() };
             let isa: Vec<u8> = gds_op(code, OFF, 1, 2, 4, 10).iter().flat_map(|w| w.to_le_bytes()).collect();
             let dec = tombox_xshader::rdna2::disassemble(&isa)[0].mnemonic.clone();
@@ -198,7 +203,7 @@ fn ds_gds_atomics() {
 #[test]
 fn ds_gds_shared_counters() {
     let g0 = init();
-    let add = prog(0, &gds_op(0x00, 0x40, 13, 2, 0, 0), &[]);
+    let add = prog(m0(0, SIZE), &gds_op(0x00, 0x40, 13, 2, 0, 0), &[]);
     let add = {
         let mut w = vec![vop1(1, 13, ic(0))];
         w.extend_from_slice(&add);
@@ -210,29 +215,30 @@ fn ds_gds_shared_counters() {
     for (op, delta) in [(0x3eu32, 1u32), (0x3d, 0xffff_ffff)] {
         let isa: Vec<u8> = gds_op(op, 0x20, 0, 0, 0, 10).iter().flat_map(|w| w.to_le_bytes()).collect();
         let name = tombox_xshader::rdna2::disassemble(&isa)[0].mnemonic.clone();
-        let words = prog(0x200, &gds_op(op, 0x20, 0, 0, 0, 10), &[10]);
-        let (mem, gds) = exec_gds(&words, &g0).unwrap();
+        let words = prog(m0(0x200, SIZE), &gds_op(op, 0x20, 0, 0, 0, 10), &[10]);
+        let (_, gds) = exec_gds(&words, &g0).unwrap();
         let s = (0x220 / 4) as usize;
         assert_eq!(gds[s], g0[s].wrapping_add(delta.wrapping_mul(T)), "{name}");
-        let mut got: Vec<u32> = mem[..T as usize].to_vec();
-        got.sort();
-        let mut want: Vec<u32> = (0..T).map(|k| g0[s].wrapping_add(delta.wrapping_mul(k))).collect();
-        want.sort();
-        assert_eq!(got, want, "{name}");
     }
     let lim = TB_GDS_TITLE_DWORDS * 4;
-    let words = prog(lim - OFF, &gds_op(0x2d, OFF, 1, 2, 0, 10), &[10]);
+    let words = prog(m0(lim - OFF, SIZE), &gds_op(0x2d, OFF, 1, 2, 0, 10), &[10]);
     let (mem, gds) = exec_gds(&words, &g0).unwrap();
     assert!(mem[..T as usize].iter().all(|&v| v == 0));
     assert_eq!(gds, g0);
-    let words = prog(BASE, &gds_op(0x2d, OFF, 1, 2, 0, 10), &[10]);
+    let words = prog(m0(BASE, SIZE), &gds_op(0x2d, OFF, 1, 2, 0, 10), &[10]);
     let (mem, gds) = exec_gds(&words, &g0).unwrap();
     for t in 0..T {
         assert_eq!((gds[slot(t)], mem[t as usize]), (dv(t), g0[slot(t)]));
     }
+    let words = prog(m0(BASE, OFF + 32 * 4), &gds_op(0x2d, OFF, 1, 2, 0, 10), &[10]);
+    let (mem, gds) = exec_gds(&words, &g0).unwrap();
+    for t in 0..T {
+        let want = if t < 32 { (dv(t), g0[slot(t)]) } else { (g0[slot(t)], 0) };
+        assert_eq!((gds[slot(t)], mem[t as usize]), want, "lane {t}");
+    }
     let mut rd = gds_op(0x36, OFF, 1, 0, 0, 10).to_vec();
     rd.extend_from_slice(&gds_op(0x0d, OFF + 0x400, 1, 2, 0, 0));
-    let (mem, gds) = exec_gds(&prog(BASE, &rd, &[10]), &g0).unwrap();
+    let (mem, gds) = exec_gds(&prog(m0(BASE, SIZE), &rd, &[10]), &g0).unwrap();
     for t in 0..T {
         assert_eq!(mem[t as usize], g0[slot(t)]);
     }
@@ -242,5 +248,78 @@ fn ds_gds_shared_counters() {
     for op in [0x19u32, 0x1d, 0x3f] {
         let words = prog(0, &gds_op(op, 0, 1, 2, 0, 10), &[10]);
         assert!(translate(&cs_extract(&words, T)).is_err(), "op {op:#x} must be refused");
+    }
+}
+
+const SENT: u32 = 0x5eed_0bad;
+
+fn masks() -> Vec<(&'static str, Vec<u32>, fn(u32) -> bool)> {
+    vec![
+        ("all", vec![], |_| true),
+        ("t>20", vec![vopc(0xd1, ic(20), 0)], |t| t > 20),
+        ("odd", vec![vop2(0x1b, 20, ic(1), 0), vopc(0xd5, ic(0), 20)], |t| t & 1 == 1),
+        ("lane 5 of wave 1", vec![vopc(0xd2, LIT, 0), 37], |t| t == 37),
+    ]
+}
+
+#[test]
+fn ds_gds_append_consume() {
+    let g0 = init();
+    let s = (0x220 / 4) as usize;
+    let hw = std::env::var_os("TOMBOX_EXEC_HW").is_some();
+    let mut ok = Vec::new();
+    for (op, delta, want_m) in [(0x3eu32, 1u32, "ds_append"), (0x3d, 0xffff_ffff, "ds_consume")] {
+        let isa: Vec<u8> = gds_op(op, 0x20, 0, 0, 0, 10).iter().flat_map(|w| w.to_le_bytes()).collect();
+        let name = tombox_xshader::rdna2::disassemble(&isa)[0].mnemonic.clone();
+        assert_eq!(name, want_m);
+        for (label, sel, on) in masks() {
+            let mut body = vec![vop1(1, 10, LIT), SENT, sop1(3, 40, 126)];
+            body.extend_from_slice(&sel);
+            body.extend_from_slice(&gds_op(op, 0x20, 0, 0, 0, 10));
+            body.push(sop1(3, 126, 40));
+            let words = prog(m0(0x200, SIZE), &body, &[10]);
+            let (mem, gds) = exec_gds(&words, &g0).unwrap_or_else(|e| panic!("{name} {label}: {e}"));
+            let n: Vec<u32> = (0..T / 32).map(|w| (32 * w..32 * w + 32).filter(|&t| on(t)).count() as u32).collect();
+            let total: u32 = n.iter().sum();
+            assert_eq!(gds[s], g0[s].wrapping_add(delta.wrapping_mul(total)), "{name} {label}: counter");
+            let mut o: Vec<usize> = gds.iter().enumerate().filter(|&(k, &v)| k != s && v != g0[k]).map(|(k, _)| k).collect();
+            o.truncate(4);
+            assert!(o.is_empty(), "{name} {label}: other GDS dwords changed {o:?}");
+            for t in 0..T {
+                if !on(t) {
+                    assert_eq!(mem[t as usize], SENT, "{name} {label}: inactive lane {t} was written");
+                }
+            }
+            if !hw {
+                continue;
+            }
+            let bases: Vec<Option<u32>> = (0..T / 32).map(|w| (32 * w..32 * w + 32).find(|&t| on(t)).map(|t| mem[t as usize])).collect();
+            for w in 0..T / 32 {
+                if let Some(b) = bases[w as usize] {
+                    for t in (32 * w..32 * w + 32).filter(|&t| on(t)) {
+                        assert_eq!(mem[t as usize], b, "{name} {label}: lane {t} of wave {w} differs from the wave's pre-op value");
+                    }
+                }
+            }
+            let live: Vec<(u32, u32)> = bases.iter().zip(&n).filter_map(|(b, &k)| b.map(|b| (b, k))).collect();
+            let orders = if live.len() == 2 { vec![vec![0usize, 1], vec![1, 0]] } else { vec![(0..live.len()).collect()] };
+            let fits = orders.iter().any(|ord| {
+                let mut c = g0[s];
+                ord.iter().all(|&i| {
+                    let good = live[i].0 == c;
+                    c = c.wrapping_add(delta.wrapping_mul(live[i].1));
+                    good
+                })
+            });
+            assert!(fits, "{name} {label}: wave pre-op values {live:08x?} are not a serial order of per-wave count_bits(exec) updates from {:08x}", g0[s]);
+        }
+        if hw {
+            ok.push(name);
+        }
+    }
+    if hw {
+        println!("ds_gds_append_consume: {} mnemonics verified on hardware: {ok:?}", ok.len());
+    } else {
+        println!("ds_gds_append_consume: WARP waves are narrower than an RDNA2 wave32, so only the counter totals were checked. Set TOMBOX_EXEC_HW=1 to check the per-wave return values on a wave32 device.");
     }
 }

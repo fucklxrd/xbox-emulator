@@ -45,7 +45,7 @@ unsafe extern "system" fn get_sandbox_id(_t: This, size: usize, buf: *mut u8, us
 
 pub fn analytics_bytes() -> [u8; 144] {
     let mut b = [0u8; 144];
-    let os: u64 = (10u64 << 48) | (25398u64 << 16);
+    let os: u64 = super::package::xversion([10, 0, 25398, 0]);
     b[0..8].copy_from_slice(&os.to_le_bytes());
     b[8..16].copy_from_slice(&os.to_le_bytes());
     b[16..28].copy_from_slice(b"Windows.Xbox");

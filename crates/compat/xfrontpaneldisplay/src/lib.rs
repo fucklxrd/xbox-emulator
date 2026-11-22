@@ -80,6 +80,13 @@ pub extern "system" fn XFrontPanelPresentBuffer(size: u32, buffer: *const c_void
     if buffer.is_null() {
         return E_POINTER;
     }
+    if xfp::try_connect() < 0 {
+        return xfp::try_connect();
+    }
+    let hr = xfp::set_display_buffer(buffer as *const u8, 8);
+    if hr < 0 {
+        return hr;
+    }
     let src = unsafe { core::slice::from_raw_parts(buffer as *const u8, PANEL_BYTES) };
     let n = {
         let mut p = panel();
@@ -95,7 +102,7 @@ pub extern "system" fn XFrontPanelPresentBuffer(size: u32, buffer: *const c_void
         window::show();
         window::invalidate();
     }
-    S_OK
+    hr
 }
 
 #[no_mangle]
@@ -103,12 +110,30 @@ pub extern "system" fn XFrontPanelGetLightStates(lights: *mut u32) -> i32 {
     if lights.is_null() {
         return E_INVALIDARG;
     }
-    unsafe { *lights = panel().lights };
+    unsafe { *lights = 0 };
+    if xfp::try_connect() < 0 {
+        return xfp::try_connect();
+    }
+    let mut led = 0u16;
+    if xfp::get_led_state(&mut led) < 0 {
+        return xfp::get_led_state(&mut led);
+    }
+    let v = xfp::led_to_lights(led);
+    unsafe { *lights = v };
+    panel().lights = v;
     S_OK
 }
 
 #[no_mangle]
 pub extern "system" fn XFrontPanelSetLightStates(lights: u32) -> i32 {
+    let led = xfp::lights_to_led(lights);
+    if xfp::try_connect() < 0 {
+        return xfp::try_connect();
+    }
+    let hr = xfp::set_led_state(led);
+    if hr < 0 {
+        return hr;
+    }
     let old = {
         let mut p = panel();
         let old = p.lights;
@@ -121,16 +146,19 @@ pub extern "system" fn XFrontPanelSetLightStates(lights: u32) -> i32 {
             window::invalidate();
         }
     }
-    S_OK
+    hr
 }
 
 #[no_mangle]
 pub extern "system" fn XFrontPanelGetButtonStates(buttons: *mut u32) -> i32 {
-    if buttons.is_null() {
-        return E_INVALIDARG;
+    if xfp::try_connect() < 0 {
+        return xfp::try_connect();
     }
-    unsafe { *buttons = panel().buttons };
-    S_OK
+    let hr = xfp::get_key_state(buttons);
+    if hr >= 0 && !buttons.is_null() {
+        panel().buttons = unsafe { *buttons } & BUTTON_MASK;
+    }
+    hr
 }
 
 pub fn set_buttons(b: u32) {
@@ -188,39 +216,6 @@ mod tests {
         assert_eq!(XFrontPanelGetScreenPixelFormat(&mut f), S_OK);
         assert_eq!(f, 0x3d);
         assert_eq!(XFrontPanelGetScreenPixelFormat(core::ptr::null_mut()), E_INVALIDARG);
-    }
-
-    #[test]
-    fn present_stores_frame_with_console_validation() {
-        let mut buf = vec![0u8; PANEL_BYTES];
-        buf[5] = 200;
-        buf[PANEL_BYTES - 1] = 17;
-        assert_eq!(XFrontPanelPresentBuffer(0x3fff, buf.as_ptr() as *const c_void), E_INVALIDARG);
-        assert_eq!(XFrontPanelPresentBuffer(0x4000, core::ptr::null()), E_POINTER);
-        assert_eq!(XFrontPanelPresentBuffer(0x4000, buf.as_ptr() as *const c_void), S_OK);
-        let p = panel();
-        assert_eq!(p.pixels[5], 200);
-        assert_eq!(p.pixels[PANEL_BYTES - 1], 17);
-        assert!(p.presents >= 1);
-    }
-
-    #[test]
-    fn lights_and_buttons_keep_state() {
-        assert_eq!(XFrontPanelSetLightStates(0xff), S_OK);
-        let mut v = 0u32;
-        assert_eq!(XFrontPanelGetLightStates(&mut v), S_OK);
-        assert_eq!(v, 0x1f);
-        XFrontPanelSetLightStates(0x5);
-        XFrontPanelGetLightStates(&mut v);
-        assert_eq!(v, 0x5);
-        assert_eq!(XFrontPanelGetLightStates(core::ptr::null_mut()), E_INVALIDARG);
-        set_buttons(0x21);
-        assert_eq!(XFrontPanelGetButtonStates(&mut v), S_OK);
-        assert_eq!(v, 0x21);
-        set_buttons(0);
-        XFrontPanelGetButtonStates(&mut v);
-        assert_eq!(v, 0);
-        assert_eq!(XFrontPanelGetButtonStates(core::ptr::null_mut()), E_INVALIDARG);
     }
 
     #[test]

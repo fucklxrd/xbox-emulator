@@ -38,8 +38,10 @@ unsafe fn real_xasync_ok() -> bool {
     q(&XASYNC, &XASYNC, &mut out) >= 0 && !out.is_null()
 }
 
+type Tagged = (usize, Job);
+
 struct Pool {
-    q: Mutex<VecDeque<Job>>,
+    q: Mutex<VecDeque<Tagged>>,
     cv: Condvar,
     started: AtomicUsize,
 }
@@ -58,7 +60,7 @@ fn pool() -> &'static Pool {
                 let job = {
                     let mut q = p.q.lock().unwrap_or_else(|e| e.into_inner());
                     loop {
-                        if let Some(j) = q.pop_front() {
+                        if let Some((_, j)) = q.pop_front() {
                             break j;
                         }
                         q = p.cv.wait(q).unwrap_or_else(|e| e.into_inner());
@@ -73,7 +75,7 @@ fn pool() -> &'static Pool {
 
 pub struct Port {
     mode: u32,
-    items: Mutex<VecDeque<Job>>,
+    items: Mutex<VecDeque<Tagged>>,
     cv: Condvar,
     terminated: AtomicBool,
     serial_started: AtomicBool,
@@ -85,7 +87,12 @@ impl Port {
         Arc::new(Port { mode, items: Mutex::new(VecDeque::new()), cv: Condvar::new(), terminated: AtomicBool::new(false), serial_started: AtomicBool::new(false), users: AtomicUsize::new(0) })
     }
 
+    #[cfg(test)]
     fn submit(self: &Arc<Port>, job: Job) {
+        self.submit_tagged(0, job)
+    }
+
+    fn submit_tagged(self: &Arc<Port>, tag: usize, job: Job) {
         if self.terminated.load(Ordering::Acquire) {
             job(true);
             return;
@@ -94,19 +101,34 @@ impl Port {
             IMMEDIATE => job(false),
             THREAD_POOL => {
                 let p = pool();
-                p.q.lock().unwrap_or_else(|e| e.into_inner()).push_back(job);
+                p.q.lock().unwrap_or_else(|e| e.into_inner()).push_back((tag, job));
                 p.cv.notify_one();
             }
             SERIALIZED => {
-                self.items.lock().unwrap_or_else(|e| e.into_inner()).push_back(job);
+                self.items.lock().unwrap_or_else(|e| e.into_inner()).push_back((tag, job));
                 self.cv.notify_all();
                 self.ensure_serial();
             }
             _ => {
-                self.items.lock().unwrap_or_else(|e| e.into_inner()).push_back(job);
+                self.items.lock().unwrap_or_else(|e| e.into_inner()).push_back((tag, job));
                 self.cv.notify_all();
             }
         }
+    }
+
+    fn take_tagged(&self, tag: usize) -> Vec<Job> {
+        let mut out = Vec::new();
+        let mut q = self.items.lock().unwrap_or_else(|e| e.into_inner());
+        let mut keep = VecDeque::with_capacity(q.len());
+        for (t, j) in q.drain(..) {
+            if t == tag {
+                out.push(j);
+            } else {
+                keep.push_back((t, j));
+            }
+        }
+        *q = keep;
+        out
     }
 
     fn ensure_serial(self: &Arc<Port>) {
@@ -118,12 +140,17 @@ impl Port {
             let job = {
                 let mut q = me.items.lock().unwrap_or_else(|e| e.into_inner());
                 loop {
-                    if let Some(j) = q.pop_front() {
-                        break j;
+                    if let Some((_, j)) = q.pop_front() {
+                        break Some(j);
+                    }
+                    if me.users.load(Ordering::Acquire) == 0 {
+                        me.serial_started.store(false, Ordering::Release);
+                        break None;
                     }
                     q = me.cv.wait(q).unwrap_or_else(|e| e.into_inner());
                 }
             };
+            let Some(job) = job else { return };
             job(me.terminated.load(Ordering::Acquire));
         });
     }
@@ -133,16 +160,16 @@ impl Port {
             IMMEDIATE => job(false),
             THREAD_POOL => {
                 let p = pool();
-                p.q.lock().unwrap_or_else(|e| e.into_inner()).push_back(job);
+                p.q.lock().unwrap_or_else(|e| e.into_inner()).push_back((0, job));
                 p.cv.notify_one();
             }
             _ => {
-                self.items.lock().unwrap_or_else(|e| e.into_inner()).push_back(job);
+                self.items.lock().unwrap_or_else(|e| e.into_inner()).push_back((0, job));
                 self.cv.notify_all();
                 if self.mode == SERIALIZED {
                     self.ensure_serial();
                 } else if self.users.load(Ordering::Acquire) == 0 {
-                    let drained: Vec<Job> = self.items.lock().unwrap_or_else(|e| e.into_inner()).drain(..).collect();
+                    let drained: Vec<Job> = self.items.lock().unwrap_or_else(|e| e.into_inner()).drain(..).map(|(_, j)| j).collect();
                     for j in drained {
                         j(true);
                     }
@@ -156,7 +183,7 @@ impl Port {
         let job = {
             let mut q = self.items.lock().unwrap_or_else(|e| e.into_inner());
             loop {
-                if let Some(j) = q.pop_front() {
+                if let Some((_, j)) = q.pop_front() {
                     break Some(j);
                 }
                 let now = Instant::now();
@@ -184,7 +211,7 @@ impl Port {
 
     fn cancel_all(&self) {
         self.terminated.store(true, Ordering::Release);
-        let drained: Vec<Job> = self.items.lock().unwrap_or_else(|e| e.into_inner()).drain(..).collect();
+        let drained: Vec<Job> = self.items.lock().unwrap_or_else(|e| e.into_inner()).drain(..).map(|(_, j)| j).collect();
         for j in drained {
             j(true);
         }
@@ -200,6 +227,38 @@ pub struct Queue {
     process: bool,
     owns: bool,
     ended: Arc<AtomicBool>,
+    live: Arc<Live>,
+}
+
+#[derive(Default)]
+struct Live {
+    n: Mutex<usize>,
+    cv: Condvar,
+}
+
+impl Live {
+    fn enter(&self) {
+        *self.n.lock().unwrap_or_else(|e| e.into_inner()) += 1;
+    }
+
+    fn leave(&self) {
+        let mut n = self.n.lock().unwrap_or_else(|e| e.into_inner());
+        *n = n.saturating_sub(1);
+        if *n == 0 {
+            self.cv.notify_all();
+        }
+    }
+
+    fn idle(&self) -> bool {
+        *self.n.lock().unwrap_or_else(|e| e.into_inner()) == 0
+    }
+
+    fn wait_idle(&self) {
+        let mut n = self.n.lock().unwrap_or_else(|e| e.into_inner());
+        while *n != 0 {
+            n = self.cv.wait(n).unwrap_or_else(|e| e.into_inner());
+        }
+    }
 }
 
 const QMAGIC: u64 = 0x5442_5851_5545_5545;
@@ -218,7 +277,7 @@ fn port_handle(p: &Arc<Port>) -> usize {
 fn new_queue(work: Arc<Port>, completion: Arc<Port>, process: bool, owns: bool) -> usize {
     work.users.fetch_add(1, Ordering::AcqRel);
     completion.users.fetch_add(1, Ordering::AcqRel);
-    Box::into_raw(Box::new(Queue { magic: QMAGIC, work, completion, refs: AtomicUsize::new(1), process, owns, ended: Arc::new(AtomicBool::new(false)) })) as usize
+    Box::into_raw(Box::new(Queue { magic: QMAGIC, work, completion, refs: AtomicUsize::new(1), process, owns, ended: Arc::new(AtomicBool::new(false)), live: Arc::new(Live::default()) })) as usize
 }
 
 fn process_queue() -> usize {
@@ -242,24 +301,43 @@ unsafe fn port_of(h: usize, port: u32) -> Option<Arc<Port>> {
     Some(if port == 0 { q.work.clone() } else { q.completion.clone() })
 }
 
-unsafe fn queued(h: usize, port: u32, job: Job) -> Option<(Arc<Port>, Job)> {
-    let q = queue(h)?;
+fn resolve(h: usize) -> usize {
+    if h == 0 { process_queue() } else { h }
+}
+
+enum Queued {
+    Ready(Arc<Port>, usize, Job),
+    Aborted(Job),
+    Invalid(Job),
+}
+
+unsafe fn queued(h: usize, port: u32, job: Job) -> Queued {
+    let Some(q) = queue(h) else { return Queued::Invalid(job) };
     let p = if port == 0 { q.work.clone() } else { q.completion.clone() };
     if q.ended.load(Ordering::Acquire) {
-        job(true);
-        return Some((p, Box::new(|_| {})));
+        return Queued::Aborted(job);
     }
     let ended = q.ended.clone();
-    Some((p, Box::new(move |canceled| job(canceled || ended.load(Ordering::Acquire)))))
+    let live = q.live.clone();
+    live.enter();
+    Queued::Ready(
+        p,
+        resolve(h),
+        Box::new(move |canceled| {
+            job(canceled || ended.load(Ordering::Acquire));
+            live.leave();
+        }),
+    )
 }
 
 pub unsafe fn submit(queue_h: usize, port: u32, job: Job) -> i32 {
     match queued(queue_h, port, job) {
-        Some((p, j)) => {
-            p.submit(j);
+        Queued::Ready(p, tag, j) => {
+            p.submit_tagged(tag, j);
             S_OK
         }
-        None => E_INVALIDARG,
+        Queued::Aborted(_) => E_ABORT,
+        Queued::Invalid(_) => E_INVALIDARG,
     }
 }
 
@@ -271,7 +349,7 @@ fn timers() -> &'static (Mutex<Vec<(Instant, usize, Arc<Port>, Option<Job>)>>, C
         std::thread::spawn(|| {
             let (m, cv) = timers();
             loop {
-                let mut due: Vec<(Arc<Port>, Job)> = Vec::new();
+                let mut due: Vec<(Arc<Port>, usize, Job)> = Vec::new();
                 {
                     let mut v = m.lock().unwrap_or_else(|e| e.into_inner());
                     loop {
@@ -279,9 +357,9 @@ fn timers() -> &'static (Mutex<Vec<(Instant, usize, Arc<Port>, Option<Job>)>>, C
                         let mut i = 0;
                         while i < v.len() {
                             if v[i].0 <= now {
-                                let (_, _, p, j) = v.swap_remove(i);
+                                let (_, tag, p, j) = v.swap_remove(i);
                                 if let Some(j) = j {
-                                    due.push((p, j));
+                                    due.push((p, tag, j));
                                 }
                             } else {
                                 i += 1;
@@ -297,8 +375,8 @@ fn timers() -> &'static (Mutex<Vec<(Instant, usize, Arc<Port>, Option<Job>)>>, C
                         };
                     }
                 }
-                for (p, j) in due {
-                    p.submit(j);
+                for (p, tag, j) in due {
+                    p.submit_tagged(tag, j);
                 }
             }
         });
@@ -307,15 +385,57 @@ fn timers() -> &'static (Mutex<Vec<(Instant, usize, Arc<Port>, Option<Job>)>>, C
 }
 
 pub unsafe fn submit_delayed(queue_h: usize, port: u32, delay_ms: u32, job: Job) -> i32 {
-    let Some((p, job)) = queued(queue_h, port, job) else { return E_INVALIDARG };
+    let (p, tag, job) = match queued(queue_h, port, job) {
+        Queued::Ready(p, tag, j) => (p, tag, j),
+        Queued::Aborted(_) => return E_ABORT,
+        Queued::Invalid(_) => return E_INVALIDARG,
+    };
     if delay_ms == 0 {
-        p.submit(job);
+        p.submit_tagged(tag, job);
         return S_OK;
     }
     let (m, cv) = timers();
-    m.lock().unwrap_or_else(|e| e.into_inner()).push((Instant::now() + Duration::from_millis(delay_ms as u64), queue_h, p, Some(job)));
+    m.lock().unwrap_or_else(|e| e.into_inner()).push((Instant::now() + Duration::from_millis(delay_ms as u64), tag, p, Some(job)));
     cv.notify_all();
     S_OK
+}
+
+fn cancel_pending(tag: usize, ports: &[&Arc<Port>]) {
+    let mut jobs: Vec<Job> = Vec::new();
+    {
+        let (m, cv) = timers();
+        let mut v = m.lock().unwrap_or_else(|e| e.into_inner());
+        let mut i = 0;
+        while i < v.len() {
+            if v[i].1 == tag {
+                if let Some(j) = v.swap_remove(i).3 {
+                    jobs.push(j);
+                }
+            } else {
+                i += 1;
+            }
+        }
+        cv.notify_all();
+    }
+    {
+        let p = pool();
+        let mut q = p.q.lock().unwrap_or_else(|e| e.into_inner());
+        let mut keep = VecDeque::with_capacity(q.len());
+        for (t, j) in q.drain(..) {
+            if t == tag {
+                jobs.push(j);
+            } else {
+                keep.push_back((t, j));
+            }
+        }
+        *q = keep;
+    }
+    for port in ports {
+        jobs.extend(port.take_tagged(tag));
+    }
+    for j in jobs {
+        j(true);
+    }
 }
 
 struct SendPtr(usize);
@@ -400,6 +520,7 @@ unsafe extern "system" fn q_terminate(_t: This, q: usize, wait: bool, ctx: *mut 
         return E_INVALIDARG;
     }
     qq.ended.store(true, Ordering::Release);
+    cancel_pending(resolve(q), &[&qq.work, &qq.completion]);
     if qq.owns {
         qq.work.cancel_all();
         qq.completion.cancel_all();
@@ -410,14 +531,27 @@ unsafe extern "system" fn q_terminate(_t: This, q: usize, wait: bool, ctx: *mut 
             cb(c.0 as *mut c_void);
         }
     };
+    let live = qq.live.clone();
     if wait {
+        live.wait_idle();
         done();
         return S_OK;
     }
+    let work = qq.work.clone();
     let completion = qq.completion.clone();
-    let deliver: Job = Box::new(move |_| done());
-    let forward: Job = Box::new(move |_| completion.submit_marker(deliver));
-    qq.work.submit_marker(forward);
+    let route = move || {
+        let deliver: Job = Box::new(move |_| done());
+        let forward: Job = Box::new(move |_| completion.submit_marker(deliver));
+        work.submit_marker(forward);
+    };
+    if live.idle() {
+        route();
+    } else {
+        std::thread::spawn(move || {
+            live.wait_idle();
+            route();
+        });
+    }
     S_OK
 }
 
@@ -602,8 +736,10 @@ pub unsafe fn complete(block: *mut Block, hr: i32, size: usize) {
                 cb(b.0 as *mut c_void);
                 notify();
             });
-            if submit(s.queue, 1, job) < 0 {
-                s.cv.notify_all();
+            match queued(s.queue, 1, job) {
+                Queued::Ready(p, tag, j) => p.submit_tagged(tag, j),
+                Queued::Aborted(j) => j(true),
+                Queued::Invalid(_) => s.cv.notify_all(),
             }
         }
         None => notify(),
@@ -759,4 +895,85 @@ pub fn interfaces() -> Vec<Iface> {
             (30, thread_is_time_sensitive as usize),
         ],
     }]
+}
+
+#[cfg(test)]
+mod port_tests {
+    use super::*;
+    use std::sync::mpsc;
+
+    fn running_serial_port(users: usize) -> Arc<Port> {
+        let port = Port::new(SERIALIZED);
+        port.users.store(users, Ordering::Release);
+        let (tx, rx) = mpsc::channel();
+        port.submit(Box::new(move |canceled| tx.send(canceled).unwrap()));
+        assert!(!rx.recv_timeout(Duration::from_secs(2)).unwrap());
+        port
+    }
+
+    fn assert_worker_stopped(port: &Arc<Port>) {
+        let deadline = Instant::now() + Duration::from_secs(2);
+        while Arc::strong_count(port) != 1 {
+            assert!(Instant::now() < deadline, "serialized worker still holds its port");
+            std::thread::yield_now();
+        }
+        assert!(!port.serial_started.load(Ordering::Acquire));
+    }
+
+    #[test]
+    fn serialized_worker_exits_after_last_user_releases_the_port() {
+        let port = running_serial_port(1);
+        port.release();
+        assert_worker_stopped(&port);
+        assert!(port.terminated.load(Ordering::Acquire));
+    }
+
+    #[test]
+    fn serialized_worker_survives_release_of_one_shared_user() {
+        let port = running_serial_port(2);
+        port.release();
+        assert!(!port.terminated.load(Ordering::Acquire));
+        let (tx, rx) = mpsc::channel();
+        port.submit(Box::new(move |canceled| tx.send(canceled).unwrap()));
+        assert!(!rx.recv_timeout(Duration::from_secs(2)).unwrap());
+        port.release();
+        assert_worker_stopped(&port);
+    }
+
+    #[test]
+    fn serialized_completion_marker_restarts_a_released_port_worker() {
+        let port = running_serial_port(1);
+        port.release();
+        assert_worker_stopped(&port);
+        let (tx, rx) = mpsc::channel();
+        port.submit_marker(Box::new(move |_| tx.send(()).unwrap()));
+        rx.recv_timeout(Duration::from_secs(2)).unwrap();
+        assert_worker_stopped(&port);
+    }
+
+    #[test]
+    fn terminating_a_live_serialized_port_still_delivers_its_marker() {
+        let port = Port::new(SERIALIZED);
+        port.users.store(1, Ordering::Release);
+        let (started_tx, started_rx) = mpsc::channel();
+        let (finish_tx, finish_rx) = mpsc::channel();
+        port.submit(Box::new(move |_| {
+            started_tx.send(()).unwrap();
+            finish_rx.recv_timeout(Duration::from_secs(2)).unwrap();
+        }));
+        started_rx.recv_timeout(Duration::from_secs(2)).unwrap();
+
+        let (cancel_tx, cancel_rx) = mpsc::channel();
+        port.submit(Box::new(move |canceled| cancel_tx.send(canceled).unwrap()));
+        port.cancel_all();
+        assert!(cancel_rx.recv_timeout(Duration::from_secs(2)).unwrap());
+
+        let (marker_tx, marker_rx) = mpsc::channel();
+        port.submit_marker(Box::new(move |_| marker_tx.send(()).unwrap()));
+        assert!(matches!(marker_rx.try_recv(), Err(mpsc::TryRecvError::Empty)));
+        finish_tx.send(()).unwrap();
+        marker_rx.recv_timeout(Duration::from_secs(2)).unwrap();
+        port.release();
+        assert_worker_stopped(&port);
+    }
 }

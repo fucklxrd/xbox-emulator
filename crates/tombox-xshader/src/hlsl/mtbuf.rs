@@ -124,6 +124,29 @@ fn pack(v: &str, bits: u32, num: Num) -> Result<String, String> {
     })
 }
 
+fn unpack_d16(v: &str, bits: u32, num: Num) -> Result<String, String> {
+    Ok(match (num, bits) {
+        (Num::Float, 16) => v.to_string(),
+        (Num::Float, 11) => format!("(({v}) << 4u)"),
+        (Num::Float, 10) => format!("(({v}) << 5u)"),
+        (Num::Uint, b) if b <= 16 => v.to_string(),
+        (Num::Sint, b) if b <= 16 => format!("(asuint({}) & 0xffffu)", sext(v, b)),
+        (Num::Uscaled, b) if b <= 11 => format!("(f32tof16((float)({v})) & 0xffffu)"),
+        (Num::Sscaled, b) if b <= 11 => format!("(f32tof16((float){}) & 0xffffu)", sext(v, b)),
+        (Num::Unorm | Num::Snorm, _) => return Err(format!("{bits}-bit {num:?} -> f16 rounding is not specified by the RDNA2 ISA")),
+        _ => return Err(format!("a {bits}-bit {num:?} component does not fit 16 bits and the RDNA2 ISA does not specify the conversion")),
+    })
+}
+
+fn pack_d16(h: &str, bits: u32, num: Num) -> Result<String, String> {
+    match num {
+        Num::Float if bits == 16 => Ok(h.to_string()),
+        Num::Unorm | Num::Snorm | Num::Float => pack(&format!("asuint(f16tof32({h}))"), bits, num),
+        Num::Sint => pack(&format!("asuint({})", sext(h, 16)), bits, num),
+        _ => pack(h, bits, num),
+    }
+}
+
 impl<'a> Emitter<'a> {
     pub(super) fn mtbuf_res(&mut self, ins: &Insn, slot: u32, table: u8) -> Result<Res, String> {
         let fmt = ufmt(ins.aux.imm2 as u32).ok_or_else(|| format!("mtbuf at {:#x}: invalid buffer format {}", ins.offset, ins.aux.imm2))?;
@@ -144,9 +167,7 @@ impl<'a> Emitter<'a> {
     }
 
     pub(super) fn emit_mtbuf(&mut self, idx: usize, ins: &Insn) -> Result<(), String> {
-        if ins.mnemonic.contains("_d16_") {
-            return Err(format!("{} (16-bit packed data) is not lowered", ins.mnemonic));
-        }
+        let d16 = ins.mnemonic.contains("_d16_");
         let fmt = ufmt(ins.aux.imm2 as u32).ok_or_else(|| format!("mtbuf: invalid buffer format {}", ins.aux.imm2))?;
         let n = comps(&ins.mnemonic).ok_or("mtbuf: bad op")?;
         let store = ins.mnemonic.starts_with("tbuffer_store");
@@ -206,7 +227,11 @@ impl<'a> Emitter<'a> {
                     self.line(&format!("uint t{t}_{k} = ({lo} >> t{t}s) | (({hi} << (31u - t{t}s)) << 1u);"));
                 }
             }
-            let one = if matches!(fmt.num, Num::Uint | Num::Sint) { "1u" } else { "0x3f800000u" };
+            let one = match (matches!(fmt.num, Num::Uint | Num::Sint), d16) {
+                (true, _) => "1u",
+                (false, false) => "0x3f800000u",
+                (false, true) => "0x3c00u",
+            };
             for k in 0..n {
                 let e = if k < nc {
                     let (off, bits) = fmt.fields[k as usize];
@@ -215,17 +240,29 @@ impl<'a> Emitter<'a> {
                     } else {
                         format!("((t{t}_{} >> {}u) & {:#x}u)", off / 32, off % 32, mask(bits))
                     };
-                    self.line(&format!("uint t{t}c{k} = {raw};"));
-                    self.line(&format!("uint t{t}v{k} = {};", unpack(&format!("t{t}c{k}"), bits, fmt.num)));
-                    format!("t{t}v{k}")
+                    let c = format!("t{t}c{k}");
+                    let v = if d16 { unpack_d16(&c, bits, fmt.num).map_err(|e| format!("{}: {e}", ins.mnemonic))? } else { unpack(&c, bits, fmt.num) };
+                    self.line(&format!("uint {c} = {raw};"));
+                    v
                 } else if k == 3 {
                     one.to_string()
                 } else {
                     "0u".to_string()
                 };
-                if k >= nc {
-                    self.line(&format!("uint t{t}v{k} = {e};"));
+                self.line(&format!("uint t{t}v{k} = {e};"));
+            }
+            if d16 {
+                for j in 0..n.div_ceil(2) {
+                    let o = Opnd::Vgpr(vd + j as u8);
+                    let e = if 2 * j + 1 < n {
+                        format!("(t{t}v{} | (t{t}v{} << 16u))", 2 * j, 2 * j + 1)
+                    } else {
+                        self.touch(&o);
+                        format!("(({} & 0xffff0000u) | t{t}v{})", r(&o)?, 2 * j)
+                    };
+                    self.wv(&o, &e)?;
                 }
+                return Ok(());
             }
             for k in 0..n {
                 self.wv(&Opnd::Vgpr(vd + k as u8), &format!("t{t}v{k}"))?;
@@ -242,9 +279,16 @@ impl<'a> Emitter<'a> {
         let mut words = vec![String::new(); ndw as usize];
         for k in 0..w {
             let (off, bits) = fmt.fields[k as usize];
-            let o = Opnd::Vgpr(vd + k as u8);
-            self.touch(&o);
-            let p = pack(&r(&o)?, bits, fmt.num)?;
+            let p = if d16 {
+                let o = Opnd::Vgpr(vd + (k / 2) as u8);
+                self.touch(&o);
+                let h = if k % 2 == 0 { format!("({} & 0xffffu)", r(&o)?) } else { format!("({} >> 16u)", r(&o)?) };
+                pack_d16(&h, bits, fmt.num)?
+            } else {
+                let o = Opnd::Vgpr(vd + k as u8);
+                self.touch(&o);
+                pack(&r(&o)?, bits, fmt.num)?
+            };
             let part = if off % 32 == 0 { format!("({p})") } else { format!("(({p}) << {}u)", off % 32) };
             let slot_w = &mut words[(off / 32) as usize];
             if slot_w.is_empty() {

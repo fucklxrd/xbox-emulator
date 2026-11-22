@@ -345,6 +345,39 @@ fn barrier(res: *mut c_void, before: u32, after: u32) -> [u64; 4] {
     [0, res as u64, 0xffff_ffffu64 | ((before as u64) << 32), after as u64]
 }
 
+unsafe fn snap_buffers(queue: *mut c_void, st: &State) -> Option<(*mut c_void, *mut c_void)> {
+    let mut device: *mut c_void = core::ptr::null_mut();
+    if vcall!(queue, 7, fn(*const Guid, *mut *mut c_void) -> i32, &IID_DEVICE, &mut device) < 0 || device.is_null() {
+        return None;
+    }
+    let size = crate::present_snap::row_pitch(st.width as u32) as u64 * st.height as u64;
+    let heap: [u32; 5] = [3, 0, 0, 1, 1];
+    let mut bd = [0u8; 0x38];
+    bd[0..4].copy_from_slice(&1u32.to_le_bytes());
+    bd[0x10..0x18].copy_from_slice(&size.to_le_bytes());
+    bd[0x18..0x1c].copy_from_slice(&1u32.to_le_bytes());
+    bd[0x1c..0x1e].copy_from_slice(&1u16.to_le_bytes());
+    bd[0x1e..0x20].copy_from_slice(&1u16.to_le_bytes());
+    bd[0x24..0x28].copy_from_slice(&1u32.to_le_bytes());
+    bd[0x2c..0x30].copy_from_slice(&1u32.to_le_bytes());
+    let mut out = [core::ptr::null_mut::<c_void>(); 2];
+    for o in out.iter_mut() {
+        let hr = vcall!(device, 27, fn(*const u32, u32, *const u8, u32, *const c_void, *const Guid, *mut *mut c_void) -> i32,
+            heap.as_ptr(), 0, bd.as_ptr(), 0x400, core::ptr::null(), &IID_RESOURCE, o);
+        if hr < 0 || o.is_null() {
+            record("d3d12_xs", "PresentX.snap", &format!("readback buffer {size:#x} hr={hr:#010x}"));
+        }
+    }
+    vcall!(device, 2, fn() -> u32);
+    if out.iter().any(|p| p.is_null()) {
+        for p in out.into_iter().filter(|p| !p.is_null()) {
+            vcall!(p, 2, fn() -> u32);
+        }
+        return None;
+    }
+    Some((out[0], out[1]))
+}
+
 unsafe fn present_frame(st: &mut State, queue: *mut c_void, src: *mut c_void) -> Result<(), String> {
     const COMMON: u32 = 0; // == PRESENT
     const COPY_DEST: u32 = 0x400;
@@ -364,9 +397,56 @@ unsafe fn present_frame(st: &mut State, queue: *mut c_void, src: *mut c_void) ->
     let pre = [barrier(src, COMMON, COPY_SOURCE), barrier(dst, COMMON, COPY_DEST)];
     vcall!(st.list, 26, fn(u32, *const [u64; 4]) -> (), 2, pre.as_ptr());
     vcall!(st.list, 17, fn(*mut c_void, *mut c_void) -> (), dst, src); // CopyResource
-    let post = [barrier(src, COPY_SOURCE, COMMON), barrier(dst, COPY_DEST, COMMON)];
+    let snap_frame = st.frames + 1;
+    let snaps = if crate::present_snap::wanted(snap_frame) { snap_buffers(queue, st) } else { None };
+    let dst_after = if let Some((rb_src, rb_dst)) = snaps {
+        let mid = [barrier(dst, COPY_DEST, COPY_SOURCE)];
+        vcall!(st.list, 26, fn(u32, *const [u64; 4]) -> (), 1, mid.as_ptr());
+        for (rb, tex) in [(rb_src, src), (rb_dst, dst)] {
+            let d = crate::present_snap::footprint_location(rb, st.format, st.width as u32, st.height);
+            let s = crate::present_snap::subresource_location(tex);
+            vcall!(st.list, 16, fn(*const u8, u32, u32, u32, *const u8, *const c_void) -> (), d.as_ptr(), 0, 0, 0, s.as_ptr(), core::ptr::null());
+        }
+        COPY_SOURCE
+    } else {
+        COPY_DEST
+    };
+    let post = [barrier(src, COPY_SOURCE, COMMON), barrier(dst, dst_after, COMMON)];
     vcall!(st.list, 26, fn(u32, *const [u64; 4]) -> (), 2, post.as_ptr());
     let hr = vcall!(st.list, 9, fn() -> i32);
+    if let Some((rb_src, rb_dst)) = snaps {
+        if hr >= 0 {
+            let lists = [st.list];
+            vcall!(queue, 10, fn(u32, *const *mut c_void) -> (), 1, lists.as_ptr());
+            st.fence_value += 1;
+            vcall!(queue, 14, fn(*mut c_void, u64) -> i32, st.fence, st.fence_value);
+            if crate::present_wait::wait_fence(st.fence, st.fence_value, 5000) {
+                let state = crate::gpu_va::state(src as usize);
+                for (tag, rb) in [("title_backbuffer", rb_src), ("presented_swapchain", rb_dst)] {
+                    let len = crate::present_snap::row_pitch(st.width as u32) as usize * st.height as usize;
+                    let mut p: *mut u8 = core::ptr::null_mut();
+                    if vcall!(rb, 8, fn(u32, *const c_void, *mut *mut u8) -> i32, 0, core::ptr::null(), &mut p) >= 0 && !p.is_null() {
+                        let data = core::slice::from_raw_parts(p, len);
+                        let extra = format!(" | src={src:p} trackedState={state:#x} titleFmt={}", st.format);
+                        crate::present_snap::finish(tag, snap_frame, data, st.width as u32, st.height, st.format, &extra);
+                        vcall!(rb, 9, fn(u32, *const c_void) -> (), 0, core::ptr::null());
+                    }
+                }
+            }
+        }
+        vcall!(rb_src, 2, fn() -> u32);
+        vcall!(rb_dst, 2, fn() -> u32);
+        vcall!(dst, 2, fn() -> u32);
+        if hr < 0 {
+            return Err(format!("present list Close hr={hr:#010x}"));
+        }
+        let hr = vcall!(st.swapchain, 8, fn(u32, u32) -> i32, 0, 0);
+        if hr < 0 {
+            return Err(format!("swapchain Present hr={hr:#010x}"));
+        }
+        st.frames += 1;
+        return Ok(());
+    }
     vcall!(dst, 2, fn() -> u32); // Release our GetBuffer ref
     if hr < 0 {
         return Err(format!("present list Close hr={hr:#010x}"));
@@ -584,29 +664,68 @@ unsafe extern "system" fn exec_lists_x(queue: *mut c_void, n: u32, lists: *const
     }
     let real: Vec<*mut c_void> =
         (0..n as usize).map(|i| crate::cmdlist_wrap::unwrap(*lists.add(i))).collect();
-    let real = crate::cl2_state::skip_presubmitted(crate::list_split::expand(&real));
+    let mut real = crate::cl2_state::skip_presubmitted(crate::list_split::expand(&real));
+    crate::indirect_bundle::resolve(&mut real);
+    let real = real;
     crate::sys_ts::note_queue(queue, REAL_QVT[16].load(Ordering::Relaxed), REAL_QVT[17].load(Ordering::Relaxed));
     let split = crate::cl2_state::before_execute(queue, &real);
     crate::title_heap::sync_for_execute(&real);
+    crate::title_shadow::before_execute();
     crate::slowcall::time("queue ExecuteCommandLists replay hook", || crate::replay::on_execute(queue, &real));
     crate::slowcall::time("queue ExecuteCommandLists", || crate::gpu_wait::submit(queue, &real, f, REAL_QVT[14].load(Ordering::Relaxed), REAL_QVT[15].load(Ordering::Relaxed)));
+    crate::title_shadow::after_execute(queue, REAL_QVT[14].load(Ordering::Relaxed), REAL_QVT[15].load(Ordering::Relaxed));
     crate::list_split::after_submit(queue, &real);
     crate::cl2_state::note_executed(queue, &real);
-    crate::cl2_state::after_execute(queue, &split)
+    crate::cl2_state::after_execute(queue, &split);
+    crate::ts99::after_execute(queue, &real);
 }
 
 unsafe extern "system" fn queue_freq(queue: *mut c_void, out: *mut u64) -> i32 {
     let f: crate::timestamp::FreqFn = core::mem::transmute(REAL_QVT[16].load(Ordering::Relaxed));
-    let hr = f(queue, out);
-    crate::timestamp::on_frequency(queue, out, hr);
-    hr
+    let mut host = 0u64;
+    let hr = f(queue, &mut host);
+    crate::timestamp::on_frequency(queue, &mut host, hr);
+    crate::ts99::title_frequency(out)
 }
 
 unsafe extern "system" fn queue_calib(queue: *mut c_void, gpu: *mut u64, cpu: *mut u64) -> i32 {
-    let f: crate::timestamp::CalibFn = core::mem::transmute(REAL_QVT[17].load(Ordering::Relaxed));
-    let hr = f(queue, gpu, cpu);
+    let hr = crate::ts99::title_calibration(queue, gpu, cpu);
     crate::timestamp::on_calibration(queue, gpu, cpu, hr);
     hr
+}
+
+pub fn real_queue_slot(i: usize) -> usize {
+    REAL_QVT.get(i).map_or(0, |v| v.load(Ordering::Relaxed))
+}
+
+#[unsafe(naked)]
+unsafe extern "system" fn q_freq_dispatch() {
+    core::arch::naked_asm!(
+        "mov rax, [rsp]",
+        "sub rax, [rip + {base}]",
+        "cmp rax, [rip + {size}]",
+        "jb 2f",
+        "lea rax, [rip + {real}]",
+        "jmp qword ptr [rax + 128]",
+        "2:",
+        "jmp {x}",
+        base = sym EXE_BASE, size = sym EXE_SIZE, real = sym REAL_QVT, x = sym queue_freq,
+    );
+}
+
+#[unsafe(naked)]
+unsafe extern "system" fn q_calib_dispatch() {
+    core::arch::naked_asm!(
+        "mov rax, [rsp]",
+        "sub rax, [rip + {base}]",
+        "cmp rax, [rip + {size}]",
+        "jb 2f",
+        "lea rax, [rip + {real}]",
+        "jmp qword ptr [rax + 136]",
+        "2:",
+        "jmp {x}",
+        base = sym EXE_BASE, size = sym EXE_SIZE, real = sym REAL_QVT, x = sym queue_calib,
+    );
 }
 
 /// Vtable entry for slot 10: title callers get `exec_lists_x`, everyone else the real method.
@@ -644,8 +763,8 @@ pub fn apply_queue_vtable(queue: *mut c_void) {
             install_qthunks();
             install_qlow();
             QUEUE_VT[10].store(q_exec_dispatch as usize, Ordering::Relaxed);
-            QUEUE_VT[16].store(queue_freq as usize, Ordering::Relaxed);
-            QUEUE_VT[17].store(queue_calib as usize, Ordering::Relaxed);
+            QUEUE_VT[16].store(q_freq_dispatch as usize, Ordering::Relaxed);
+            QUEUE_VT[17].store(q_calib_dispatch as usize, Ordering::Relaxed);
             XBOX_QVT[30].store(present_x as usize, Ordering::Relaxed);
             XBOX_QVT[23].store(signal_x as usize, Ordering::Relaxed);
             let base = GetModuleHandleW(core::ptr::null()) as usize;

@@ -1,1 +1,1 @@
-1 DllGetClassObject forwarded | console 0x1149b0: E_OUTOFMEMORY for any CLSID but CLSID_CMSH264DecoderMFT {62CE7E72-4C71-4D20-B15D-452831A87D9D}; that CLSID's factory comes from the PC msmpeg2vdec.dll, the same MFT class
+1 DllGetClassObject implemented | code thunk, not a PE forwarder: console 0x1149b0: E_OUTOFMEMORY for any CLSID but CLSID_CMSH264DecoderMFT {62CE7E72-4C71-4D20-B15D-452831A87D9D}; that CLSID's factory comes from the PC msmpeg2vdec.dll, the same MFT class

@@ -7,11 +7,11 @@
 | Milestone | Progress | State |
 |---|---|---|
 | All imported system functions covered | 671/671 | reached |
-| All Direct3D 12.x methods covered | 189/200 | open |
-| All RDNA2 instructions verified | 573/721 | open |
-| All shader stages translated | 6/8 | open |
+| All Direct3D 12.x methods covered | 194/200 | open |
+| All RDNA2 instructions verified | 769/779 | open |
+| All shader stages translated | 0/8 | open |
 | Full title shader sweep translated | 105506/105506 | reached |
-| All Xbox console libraries covered | 2076/2141 | open |
+| All Xbox console libraries covered | 2070/2159 | open |
 
 ## Running titles (Fortnite)
 

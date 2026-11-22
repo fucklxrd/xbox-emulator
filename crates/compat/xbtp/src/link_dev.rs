@@ -127,6 +127,10 @@ unsafe fn sync_done(r: *mut u32, ov: *mut OVERLAPPED, n: u32) -> i32 {
     if !ov.is_null() {
         (*ov).internal = 0;
         (*ov).internal_high = n as usize;
+        let ev = ((*ov).event as usize & !1) as HANDLE;
+        if !ev.is_null() {
+            SetEvent(ev);
+        }
     }
     1
 }

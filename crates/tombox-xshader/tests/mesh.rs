@@ -244,7 +244,11 @@ fn mesh_refusals_are_explicit() {
     assert!(translate(&ms(&base, mi, pos_param_outs())).err().expect("refusal").contains("per-primitive outputs"));
     let mut mi = mesh_info(128, 128, 128, 2);
     mi.payload_bytes = 16;
-    assert!(translate(&ms(&base, mi, pos_param_outs())).err().expect("refusal").contains("amplification payload"));
+    let t = translate(&ms(&base, mi, pos_param_outs())).expect("mesh shader with an amplification payload");
+    assert!(t.hlsl.contains("struct TbPayload { uint w[4]; };") && t.hlsl.contains("in payload TbPayload tb_pl"), "{}", t.hlsl);
+    let mut mi = mesh_info(128, 128, 128, 2);
+    mi.payload_bytes = 16388;
+    assert!(translate(&ms(&base, mi, pos_param_outs())).err().expect("refusal").contains("payload of 16388 bytes exceeds the D3D12 limit 16384"));
     assert!(translate(&ms(&base, mesh_info(64, 128, 64, 2), pos_param_outs())).err().expect("refusal").contains("multi-row export"));
     assert!(translate(&ms(&base, mesh_info(128, 128, 128, 0), pos_param_outs())).err().expect("refusal").contains("topology 0"));
     let mut bad = base.clone();
@@ -258,7 +262,7 @@ fn mesh_refusals_are_explicit() {
     let mut a = ms(&base, mesh_info(128, 128, 128, 2), pos_param_outs());
     a.stage = Stage::Amplification;
     let e = translate(&a).err().expect("refusal");
-    assert!(e.contains("s3 = payload ring >> 8") && e.contains("no global-store path"), "{e}");
+    assert!(e.contains("s_sendmsg outside a geometry shader"), "{e}");
 }
 
 #[test]
@@ -283,6 +287,7 @@ fn gta_dir() -> Option<std::path::PathBuf> {
 }
 
 #[test]
+#[cfg_attr(not(tombox_fixtures_mesh), ignore = "needs analysis/shaders/mesh fixtures extracted from local title dumps")]
 fn gta_mesh_programs_extract_with_mesh_runtime_info() {
     let dir = gta_dir().expect("analysis/shaders/mesh fixtures");
     let mut n = 0;

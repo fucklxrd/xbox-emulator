@@ -25,8 +25,8 @@
 25 SymbolServerGetIndexStringW implemented | DWORD/DWORDPTR %x, GUIDPTR %08X%04X%04X%02X*8 (Data1 only when the rest is zero), OLDGUIDPTR space-padded lowercase, STRING copy, then two/three as %x when nonzero
 26 SymbolServerGetOptions implemented | returns the option bits
 27 SymbolServerSetOptions implemented | DOWNSTREAM_STORE string converted ANSI to wide, then SetOptionsW
-28 httpCloseHandle forwarded | InternetCloseHandle or WinHttpCloseHandle chosen as the console does (WININET bit, WINHTTP bit, or service token), last error preserved
+28 httpCloseHandle implemented | code thunk, not a PE forwarder: InternetCloseHandle or WinHttpCloseHandle chosen as the console does (WININET bit, WINHTTP bit, or service token), last error preserved
 29 httpOpenFileHandle implemented | ANSI to wide (0x410 chars), then httpOpenFileHandleW
 30 httpOpenFileHandleW implemented | site/file split, '\' to '/', 87 for non-http sites or bad URLs; any valid URL fails with 12029 because the emulator never reaches the network
-31 httpQueryDataAvailable forwarded | InternetQueryDataAvailable or WinHttpQueryDataAvailable by the same engine choice
-32 httpReadFile forwarded | InternetReadFile or WinHttpReadData by the same engine choice
+31 httpQueryDataAvailable implemented | code thunk, not a PE forwarder: InternetQueryDataAvailable or WinHttpQueryDataAvailable by the same engine choice
+32 httpReadFile implemented | code thunk, not a PE forwarder: InternetReadFile or WinHttpReadData by the same engine choice

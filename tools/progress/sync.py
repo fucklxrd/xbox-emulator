@@ -1,13 +1,15 @@
 import argparse, json, os, re, shutil
 
 here = os.path.dirname(os.path.abspath(__file__))
+repo = os.path.normpath(os.path.join(here, "..", ".."))
 data = os.path.join(here, "data")
-cfg = json.load(open(os.path.join(here, "progress.json"), encoding="utf-8"))
 
 ap = argparse.ArgumentParser(description="Refresh tools/progress/data from the TomBox tree, the title dumps (read-only) and this PC's System32. Needs pefile.")
 ap.add_argument("--tombox", default=r"D:\TomBox")
 ap.add_argument("--pc", default=os.path.join(os.environ.get("SystemRoot", r"C:\Windows"), "System32"))
+ap.add_argument("--config", default=os.path.join(here, "progress.json"))
 a = ap.parse_args()
+cfg = json.load(open(a.config, encoding="utf-8"))
 
 import pefile
 
@@ -136,29 +138,47 @@ def twin_exports(key):
     return names, found
 
 
-titles, console, skipped = {}, {}, []
+CONSOLE_HOSTED = {"minuserx.dll", "advapi32legacy.dll", "kernel32legacy.dll", "minappmodelx.dll"}
+hosts_file = os.path.join(a.tombox, "crates", "compat", "compat-common", "data", "console_apiset_hosts.txt")
+apiset_hosts = {}
+for line in open(hosts_file, encoding="utf-8") if os.path.isfile(hosts_file) else ():
+    f = line.split()
+    if len(f) == 4 and f[0].isdigit():
+        apiset_hosts.setdefault((f[1].lower(), f[2]), []).append((int(f[0]), f[3].lower()))
+
+
+def apiset_host(module, f, build):
+    low = module.lower()
+    rows = apiset_hosts.get((low if low.endswith(".dll") else low + ".dll", f))
+    if not rows or build is None:
+        return None
+    le = [r for r in rows if r[0] <= build]
+    return max(le)[1] if le else min(rows)[1]
+
+
+def tpath(t, key):
+    base = repo if t.get("base") == "repo" else a.tombox
+    return os.path.join(base, *t[key].split("/"))
+
+
+def build_num(v):
+    try:
+        return int(str(v).split(".")[2])
+    except (IndexError, ValueError, TypeError):
+        return None
+
+
+titles, console, skipped, cons_ord = {}, {}, [], {}
 for t in cfg["titles_analysed"]:
-    bdir = os.path.join(a.tombox, *t["binaries"].split("/"))
+    bdir = tpath(t, "binaries")
     exe = os.path.join(bdir, t["exe"])
     if not os.path.isfile(exe) or ("exe_size" in t and os.path.getsize(exe) != t["exe_size"]):
         skipped.append(t["name"])
         continue
-    bins = {}
-    for sub in t.get("binary_dirs", [""]):
-        d = os.path.join(bdir, *filter(None, sub.split("/")))
-        if not os.path.isdir(d):
-            continue
-        for name in sorted(os.listdir(d), key=str.lower):
-            p = os.path.join(d, name)
-            if os.path.isfile(p) and name.lower().endswith((".exe", ".dll")):
-                mods = imports(p)
-                for m in mods:
-                    m["pc"] = [pc_has(m["module"], f) for f in m["functions"]]
-                bins[f"{sub}/{name}" if sub else name] = mods
-    xvd = os.path.join(a.tombox, *t["xvd"].split("/"))
-    os_build = version(os.path.join(xvd, "System32", "ntdll.dll"))
-    titles[t["name"]] = {"exe": t["exe"], "binaries": bins, "os_build": os_build}
-    for sub in ("System32", "System32/forwarders"):
+    xvd = tpath(t, "xvd") if t.get("xvd") else None
+    os_build = version(os.path.join(xvd, "System32", "ntdll.dll")) if xvd else None
+    tord = cons_ord.setdefault(t["name"], {})
+    for sub in ("System32", "System32/forwarders") if xvd else ():
         d = os.path.join(xvd, *sub.split("/"))
         if not os.path.isdir(d):
             continue
@@ -170,6 +190,7 @@ for t in cfg["titles_analysed"]:
             if not ex:
                 continue
             key = name.lower()
+            tord.setdefault(key, {f"#{o}": n for n, o, fwd in ex if n})
             pc = pc_exports(name)
             lib = console.setdefault(key, {"name": name, "dir": sub, "pc_dll": pc is not None, "exports": {}, "versions": {}})
             lib["versions"][t["name"]] = version(p)
@@ -177,6 +198,61 @@ for t in cfg["titles_analysed"]:
                 k = n or f"#{o}"
                 row = lib["exports"].setdefault(k, [0 if pc is None else (1 if n in pc[0] else 0) if n else (2 if k in pc[1] else 0), fwd, []])
                 row[2].append(t["name"])
+    bnum = build_num(os_build) or build_num(t.get("os_build_hint"))
+    bins, files = {}, {}
+    for sub in t.get("binary_dirs", [""]):
+        d = os.path.join(bdir, *filter(None, sub.split("/")))
+        if not os.path.isdir(d):
+            continue
+        shipped = {n.lower() for n in os.listdir(d)}
+        for name in sorted(os.listdir(d), key=str.lower):
+            p = os.path.join(d, name)
+            if os.path.isfile(p) and name.lower().endswith((".exe", ".dll")):
+                mods = imports(p)
+                for m in mods:
+                    low = m["module"].lower()
+                    m["pc"] = [pc_has(m["module"], f) for f in m["functions"]]
+                    if low.startswith(("api-ms-", "ext-ms-")):
+                        hs = [apiset_host(low, f, bnum) for f in m["functions"]]
+                        hs = [h if h in CONSOLE_HOSTED else None for h in hs]
+                        if any(hs):
+                            m["hosts"] = hs
+                            m["pc"] = [0 if h else pf for h, pf in zip(hs, m["pc"])]
+                    elif low not in shipped and low in tord:
+                        nm = [tord[low].get(f) if f.startswith("#") else None for f in m["functions"]]
+                        if any(nm):
+                            m["names"] = nm
+                bins[f"{sub}/{name}" if sub else name] = mods
+                files[f"{sub}/{name}" if sub else name] = p
+    titles[t["name"]] = {"exe": t["exe"], "binaries": bins, "os_build": os_build, "build": bnum}
+    if os_build is None and t.get("os_build_hint"):
+        titles[t["name"]]["os_build_hint"] = t["os_build_hint"]
+    titles[t["name"]]["_files"] = files
+
+dyn_names = {}
+for key, lib in console.items():
+    names = {k for k, v in lib["exports"].items() if v[0] == 0 and not k.startswith("#")}
+    if names:
+        dyn_names[key] = (lib["name"], names)
+STR_RE = re.compile(rb"(?<![\x20-\x7e])[\x21-\x7e]{2,255}(?=\x00)")
+for title, t in titles.items():
+    dyn = {}
+    for b, p in t.pop("_files").items():
+        raw = open(p, "rb").read()
+        low = raw.lower()
+        strs = None
+        static = {m["module"].lower() for m in t["binaries"][b]}
+        for key, (name, names) in dyn_names.items():
+            if key in static or (key.encode() not in low and key.encode("utf-16-le") not in low):
+                continue
+            if strs is None:
+                strs = set(STR_RE.findall(raw))
+            hit = sorted(n for n in names if n.encode() in strs)
+            if hit:
+                dyn.setdefault(b, {})[name] = hit
+        del raw, low, strs
+    if dyn:
+        t["dynamic"] = dyn
 
 out = {}
 for key, lib in console.items():
@@ -189,16 +265,10 @@ for key, lib in console.items():
 json.dump(out, open(os.path.join(data, "console_exports.json"), "w", encoding="utf-8"), separators=(",", ":"))
 json.dump(titles, open(os.path.join(data, "title_imports.json"), "w", encoding="utf-8"), indent=1)
 
-emu, cdir = {}, os.path.join(a.tombox, "crates", "compat")
-for crate in sorted(os.listdir(cdir), key=str.lower):
-    table = os.path.join(cdir, crate, "exports.txt")
-    if not os.path.isfile(table):
-        continue
-    lib = re.search(r'\[lib\][^\[]*?name\s*=\s*"([^"]+)"', open(os.path.join(cdir, crate, "Cargo.toml"), encoding="utf-8").read())
-    dll = (lib.group(1) if lib else crate) + ".dll"
-    dll = next((n for n in out if n.lower() == dll.lower()), dll)
+
+def read_table(path):
     funcs, notes = {}, {}
-    for line in open(table, encoding="utf-8"):
+    for line in open(path, encoding="utf-8"):
         body, _, note = line.strip().partition(" | ")
         f = body.split()
         if len(f) < 3:
@@ -206,8 +276,66 @@ for crate in sorted(os.listdir(cdir), key=str.lower):
         funcs[f[1]] = f[2]
         if note:
             notes[f[1]] = note.strip()
-    emu[dll] = {"file": f"crates/compat/{crate}/src/lib.rs", "functions": funcs, "notes": notes}
+    return funcs, notes
+
+
+cdir = os.path.join(a.tombox, "crates", "compat")
+
+
+def lib_of(crate):
+    toml = os.path.join(cdir, crate, "Cargo.toml")
+    if not os.path.isfile(toml):
+        return None
+    lib = re.search(r'\[lib\][^\[]*?name\s*=\s*"([^"]+)"', open(toml, encoding="utf-8").read())
+    return lib.group(1) if lib else crate
+
+
+def built_exports(libname):
+    p = os.path.join(a.tombox, "target", "release", libname + ".dll")
+    if not os.path.isfile(p):
+        return None
+    ex = exports(p)
+    return {n for n, o, f in ex if n} | {f"#{o}" for n, o, f in ex}
+
+
+emu = {}
+api_builds = {b for v in apiset_hosts.values() for b, _ in v}
+for crate in sorted(os.listdir(cdir), key=str.lower):
+    base = next((os.path.join(cdir, crate, n) for n in ("exports.txt", "map_exports.txt") if os.path.isfile(os.path.join(cdir, crate, n))), None)
+    if base is None:
+        continue
+    libname = lib_of(crate) or crate
+    dll = libname + ".dll"
+    dll = next((n for n in out if n.lower() == dll.lower()), dll)
+    funcs, notes = read_table(base)
+    entry = {"file": f"crates/compat/{crate}/src/lib.rs", "table": f"crates/compat/{crate}/{os.path.basename(base)}", "functions": funcs, "notes": notes}
+    built = built_exports(libname)
+    if built is not None:
+        entry["not_in_built_dll"] = sorted(n for n, s in funcs.items() if s != "missing" and n not in built)
+    builds = {}
+    for n in sorted(os.listdir(os.path.join(cdir, crate))):
+        m = re.fullmatch(r"exports_(\d+)\.txt", n)
+        if m:
+            bf, bn = read_table(os.path.join(cdir, crate, n))
+            bt = {"table": f"crates/compat/{crate}/{n}", "lib": f"{libname}_{m.group(1)}", "functions": bf, "notes": bn}
+            bb = built_exports(bt["lib"])
+            if bb is not None:
+                bt["not_in_built_dll"] = sorted(k for k, s in bf.items() if s != "missing" and k not in bb)
+            builds[m.group(1)] = bt
+    if builds:
+        entry["builds"] = builds
+        entry["known_builds"] = sorted(api_builds | {int(b) for b in builds})
+    emu[dll] = entry
+cfg_checks = {}
+for dll, v in cfg.get("emulator", {}).items():
+    m = re.match(r"crates/compat/([^/]+)/", v.get("file", ""))
+    libname = lib_of(m.group(1)) if m else None
+    built = built_exports(libname) if libname else None
+    if built is not None:
+        cfg_checks[dll] = {"built_dll": f"target/release/{libname}.dll",
+                           "not_in_built_dll": sorted(n for n, s in v.get("functions", {}).items() if s != "missing" and n not in built)}
 json.dump(emu, open(os.path.join(data, "emulator_exports.json"), "w", encoding="utf-8"), indent=1)
+json.dump(cfg_checks, open(os.path.join(data, "emulator_cfg_checks.json"), "w", encoding="utf-8"), indent=1)
 
 EVIDENCE = ["chatprobe.json", "media.json", "gameinput_ext.json", "oshost.json"]
 edir, odir = os.path.join(a.tombox, "analysis", "progress_evidence"), os.path.join(data, "evidence")

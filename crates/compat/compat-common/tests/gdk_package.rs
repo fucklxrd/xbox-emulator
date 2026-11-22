@@ -110,6 +110,10 @@ fn check(d: &std::path::Path) {
         progress(o, m, p.as_mut_ptr());
         assert_eq!((rd(&p, 0), rd(&p, 8)), (500, 500));
         close(o, m);
+        let jp = CString::new("ja-JP").unwrap();
+        m = 0x55;
+        assert_eq!(create(o, id.as_ptr(), 1, [Sel { kind: 0, value: jp.as_ptr() as usize }].as_ptr(), 1000, 0, &mut m), package::E_GAMEPACKAGE_INVALID_SELECTOR);
+        assert_eq!(create(o, id.as_ptr(), 1, [Sel { kind: 2, value: 77 }].as_ptr(), 1000, 0, &mut m), package::E_GAMEPACKAGE_INVALID_SELECTOR);
 
         let (_, find) = method(package::CLSID, package::IID_V1, 12);
         let find: unsafe extern "system" fn(*mut c_void, *const i8, u32, *const Sel, *mut u32) -> i32 = core::mem::transmute(find);
@@ -122,6 +126,7 @@ fn check(d: &std::path::Path) {
         let it = CString::new("it-IT").unwrap();
         assert_eq!(find(o, id.as_ptr(), 1, [Sel { kind: 0, value: it.as_ptr() as usize }].as_ptr(), &mut a), 0);
         assert_eq!(a, package::UNAVAILABLE);
+        assert_eq!(package::UNAVAILABLE, 3);
         assert_eq!(find(o, id.as_ptr(), 0, core::ptr::null(), &mut a), gdk::E_INVALIDARG);
         assert_eq!(find(o, id.as_ptr(), 1, [Sel { kind: 9, value: 0 }].as_ptr(), &mut a), gdk::E_INVALIDARG);
 
@@ -134,7 +139,7 @@ fn check(d: &std::path::Path) {
         let (_, order) = method(package::CLSID, package::IID_V1, 14);
         let order: unsafe extern "system" fn(*mut c_void, *const i8, u32, *const Sel) -> i32 = core::mem::transmute(order);
         assert_eq!(order(o, id.as_ptr(), 1, [Sel { kind: 2, value: 4 }].as_ptr()), 0);
-        assert_eq!(order(o, id.as_ptr(), 1, [Sel { kind: 2, value: 77 }].as_ptr()), gdk::E_NOT_FOUND);
+        assert_eq!(order(o, id.as_ptr(), 1, [Sel { kind: 2, value: 77 }].as_ptr()), package::E_GAMEPACKAGE_INVALID_SELECTOR);
 
         let (_, install) = method(package::CLSID, package::IID_V1, 16);
         let install: unsafe extern "system" fn(*mut c_void, *const i8, u32, *const Sel, u32, bool, *mut Block) -> i32 = core::mem::transmute(install);
@@ -143,6 +148,7 @@ fn check(d: &std::path::Path) {
         let (_, result) = method(package::CLSID, package::IID_V1, 17);
         let result: unsafe extern "system" fn(*mut c_void, *mut Block, *mut usize) -> i32 = core::mem::transmute(result);
         let mut b = Box::new(Block { queue: 0, context: 0, callback: 0, internal: [0; 32] });
+        assert_eq!(install(o, id.as_ptr(), 1, [Sel { kind: 2, value: 77 }].as_ptr(), 1000, false, &mut *b), package::E_GAMEPACKAGE_INVALID_SELECTOR);
         assert_eq!(install(o, id.as_ptr(), 1, [Sel { kind: 1, value: stw.as_ptr() as usize }].as_ptr(), 1000, false, &mut *b), 0);
         assert_eq!(status(xa, &mut *b, true), 0);
         let mut im = 0usize;

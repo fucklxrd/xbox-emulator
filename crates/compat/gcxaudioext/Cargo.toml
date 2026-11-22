@@ -11,5 +11,8 @@ name = "gcxaudioext"
 crate-type = ["cdylib", "rlib"]
 path = "src/lib.rs"
 
+[dependencies]
+xma = { path = "../xma" }
+
 [build-dependencies]
 xone-exports = { path = "../xone-exports" }

@@ -117,9 +117,33 @@ pub unsafe extern "system" fn CollectHangSummary(ctx: *const u8, report: *mut u8
     }
 }
 
+#[no_mangle]
+pub unsafe extern "system" fn WriteHangDump(flags: u32, out: *mut u16, cch: u32, summary: *const u8) -> i32 {
+    match console::proc("WriteHangDump") {
+        Some(f) => {
+            let f: unsafe extern "system" fn(u32, *mut u16, u32, *const u8) -> i32 = core::mem::transmute(f);
+            f(flags, out, cch, summary)
+        }
+        None => E_FAIL,
+    }
+}
+
+#[no_mangle]
+pub unsafe extern "system" fn DebugLive(arg: u32, a2: *const u8, a3: *mut u8) -> i32 {
+    match console::proc("DebugLive") {
+        Some(f) => {
+            let f: unsafe extern "system" fn(u32, *const u8, *mut u8) -> i32 = core::mem::transmute(f);
+            f(arg, a2, a3)
+        }
+        None => E_FAIL,
+    }
+}
+
 #[cfg(test)]
 mod tests;
 #[cfg(test)]
 mod tests_hang;
 #[cfg(test)]
 mod tests_kmd;
+#[cfg(test)]
+mod tests_dump;

@@ -136,8 +136,7 @@ fn vop1_basic() {
         v1c(&mut c, "v_ceil_f32", 0x22, fb(a), qnan(a.ceil()));
         v1c(&mut c, "v_rndne_f32", 0x23, fb(a), qnan(rne(a)));
         v1c(&mut c, "v_floor_f32", 0x24, fb(a), qnan(a.floor()));
-        let fr = if a.is_infinite() { f32::NAN } else { (a - a.floor()).min(f32::from_bits(0x3f7f_ffff)) };
-        let fr = if a == 0.0 { a } else { fr };
+        let fr = if a.is_nan() || a.is_infinite() { f32::NAN } else { (a - a.floor()).min(f32::from_bits(0x3f7f_ffff)) };
         v1c(&mut c, "v_fract_f32", 0x20, fb(a), qnan(fr));
     }
     v1c(&mut c, "v_fract_f32", 0x20, fb(-1.0e-10), 0x3f7f_ffff);
@@ -180,7 +179,8 @@ fn vop1_basic() {
         v16(&mut c, "v_floor_f16", 0x5b, 0x4321_0000 | f2h(x), f2h(x.floor()));
         v16(&mut c, "v_ceil_f16", 0x5c, 0x4321_0000 | f2h(x), f2h(x.ceil()));
     }
-    v16(&mut c, "v_ceil_f16", 0x5c, 0xbc00 - 0x3c00 + 0x8001, 0x8000);
+    v16(&mut c, "v_ceil_f16", 0x5c, 0x4321_8001, 0x8000);
+    v16(&mut c, "v_ceil_f16", 0x5c, 0x4321_0001, 0x3c00);
     for &(a, b) in &[(0x1111_1111u32, 0x2222_2222u32), (0, 0xffff_ffff)] {
         let mut pre = pr();
         pre.vv(1, a).vv(10, b);
@@ -357,7 +357,7 @@ fn vop3_basic() {
             let ml = vop3p(0x21, 10, [v(1), v(2), v(3)], 0, 7, 0, 0);
             vc(&mut c, "v_fma_mixlo_f16", &[(1, p), (2, q), (3, r)], &ml, &[10], &[D16 | lo]);
             let mh = vop3p(0x22, 10, [v(1), v(2), v(3)], 0, 7, 0, 0);
-            vc(&mut c, "v_fma_mixhi_f16", &[(1, p), (2, q), (3, r)], &mh, &[10], &[(D16 >> 16) | (lo << 16)]);
+            vc(&mut c, "v_fma_mixhi_f16", &[(1, p), (2, q), (3, r)], &mh, &[10], &[(D16 & 0xffff) | (lo << 16)]);
         }
     }
     let m32 = vop3p(0x20, 10, [v(1), v(2), v(3)], 0, 0, 0, 0);

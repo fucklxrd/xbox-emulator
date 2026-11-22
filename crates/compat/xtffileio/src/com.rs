@@ -36,6 +36,7 @@ pub const FILEIO_EXTENSION_ID: GUID = GUID::new(0x8a8b4d4c, 0x6da2, 0x4fc1, [0xb
 
 pub type OperationFn = unsafe extern "system" fn(usize, *mut c_void, *mut c_void) -> HRESULT;
 
+#[cfg(not(test))]
 #[link(name = "xbtp", kind = "raw-dylib")]
 extern "C" {
     pub fn XbtpCreateExtensionMetadata(iid: *const GUID, out: *mut *mut c_void) -> HRESULT;
@@ -43,6 +44,82 @@ extern "C" {
     pub fn XbtpCreateJsonObject(out: *mut *mut c_void) -> HRESULT;
     pub fn XbtpCreateJsonArray(out: *mut *mut c_void) -> HRESULT;
     pub fn XbtpGetJsonObjectFromUtf8(utf8: *const u8, out: *mut *mut c_void) -> HRESULT;
+}
+
+#[cfg(test)]
+pub use xbtp_built::*;
+
+#[cfg(test)]
+mod xbtp_built {
+    use super::{GUID, HRESULT};
+    use core::ffi::c_void;
+    use std::path::{Path, PathBuf};
+    use std::sync::OnceLock;
+
+    #[link(name = "kernel32")]
+    extern "system" {
+        fn LoadLibraryW(name: *const u16) -> *mut c_void;
+        fn GetProcAddress(module: *mut c_void, name: *const u8) -> *mut c_void;
+    }
+
+    fn newest_in_build_dir(build: &Path, name: &str) -> Option<PathBuf> {
+        let stem = name.trim_end_matches(".dll");
+        std::fs::read_dir(build.join(stem)).ok()?
+            .flatten()
+            .map(|e| e.path().join("out").join(name))
+            .filter(|p| p.is_file())
+            .max_by_key(|p| std::fs::metadata(p).and_then(|m| m.modified()).ok())
+    }
+
+    pub fn built_dll(name: &str) -> PathBuf {
+        let exe = std::env::current_exe().unwrap();
+        exe.ancestors()
+            .skip(1)
+            .find_map(|a| [a.join(name), a.join("deps").join(name)].into_iter().find(|p| p.is_file()).or_else(|| newest_in_build_dir(&a.join("build"), name)))
+            .unwrap_or_else(|| panic!("{name} is not built in the target dir above {}", exe.display()))
+    }
+
+    fn module() -> *mut c_void {
+        static XBTP: OnceLock<usize> = OnceLock::new();
+        *XBTP.get_or_init(|| {
+            let path = built_dll("xbtp.dll");
+            let wide: Vec<u16> = path.as_os_str().to_string_lossy().encode_utf16().chain(Some(0)).collect();
+            let h = unsafe { LoadLibraryW(wide.as_ptr()) };
+            assert!(!h.is_null(), "LoadLibraryW({}) failed", path.display());
+            h as usize
+        }) as *mut c_void
+    }
+
+    unsafe fn export(name: &[u8]) -> *mut c_void {
+        let p = GetProcAddress(module(), name.as_ptr());
+        assert!(!p.is_null(), "xbtp.dll does not export {}", String::from_utf8_lossy(&name[..name.len() - 1]));
+        p
+    }
+
+    pub unsafe fn XbtpCreateExtensionMetadata(iid: *const GUID, out: *mut *mut c_void) -> HRESULT {
+        let f: unsafe extern "C" fn(*const GUID, *mut *mut c_void) -> HRESULT = core::mem::transmute(export(b"XbtpCreateExtensionMetadata\0"));
+        f(iid, out)
+    }
+
+    pub unsafe fn XbtpCreateMessage(iid: *const GUID, out: *mut *mut c_void) -> HRESULT {
+        let f: unsafe extern "C" fn(*const GUID, *mut *mut c_void) -> HRESULT = core::mem::transmute(export(b"XbtpCreateMessage\0"));
+        f(iid, out)
+    }
+
+    pub unsafe fn XbtpCreateJsonObject(out: *mut *mut c_void) -> HRESULT {
+        let f: unsafe extern "C" fn(*mut *mut c_void) -> HRESULT = core::mem::transmute(export(b"XbtpCreateJsonObject\0"));
+        f(out)
+    }
+
+    pub unsafe fn XbtpCreateJsonArray(out: *mut *mut c_void) -> HRESULT {
+        let f: unsafe extern "C" fn(*mut *mut c_void) -> HRESULT = core::mem::transmute(export(b"XbtpCreateJsonArray\0"));
+        f(out)
+    }
+
+    pub unsafe fn XbtpGetJsonObjectFromUtf8(utf8: *const u8, out: *mut *mut c_void) -> HRESULT {
+        let f: unsafe extern "C" fn(*const u8, *mut *mut c_void) -> HRESULT = core::mem::transmute(export(b"XbtpGetJsonObjectFromUtf8\0"));
+        f(utf8, out)
+    }
 }
 
 #[link(name = "oleaut32")]

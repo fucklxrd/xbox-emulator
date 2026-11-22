@@ -1,5 +1,7 @@
 use core::ffi::c_void;
-use std::sync::atomic::{AtomicU32, Ordering};
+use std::sync::OnceLock;
+
+use console_image::ConsoleDll;
 
 #[repr(C)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -23,7 +25,34 @@ pub const CLSID_SECOND: Guid = Guid { data1: 0x7FA7A8FD, data2: 0xA259, data3: 0
 pub const COM_CLASSES: [Guid; 2] = [CLSID_SIPC_PROXY_CONTROL, CLSID_SECOND];
 pub const ACTIVATION_ARG_NAME: &str = "activatibleClassId";
 
-pub static OBJECT_COUNT: AtomicU32 = AtomicU32::new(0);
+pub static CONSOLE: ConsoleDll = ConsoleDll::new("gamecoreclient.dll", "TOMBOX_GAMECORECLIENT_CONSOLE", "gamecoreclient_console.dll", "DllGetClassObject", &[]);
+static ATTACHED: OnceLock<Vec<String>> = OnceLock::new();
+
+fn own() -> usize {
+    DllCanUnloadNow as *const () as usize
+}
+
+pub fn console_module() -> usize {
+    let m = CONSOLE.module(own());
+    if m != 0 {
+        ATTACHED.get_or_init(|| unsafe { console_sandbox::attach(m) });
+    }
+    m
+}
+
+pub fn sandbox_hits() -> Vec<String> {
+    ATTACHED.get().cloned().unwrap_or_default()
+}
+
+fn loaded_module() -> usize {
+    match (CONSOLE.handle.get(), ATTACHED.get()) {
+        (Some(&m), Some(_)) => m,
+        _ => 0,
+    }
+}
+
+type ClassObjectFn = unsafe extern "system" fn(*const Guid, *const Guid, *mut *mut c_void) -> i32;
+type CanUnloadFn = unsafe extern "system" fn() -> i32;
 
 #[link(name = "runtimeobject")]
 extern "system" {
@@ -55,20 +84,30 @@ pub unsafe extern "system" fn DllGetActivationFactory(id: Hstring, factory: *mut
 }
 
 #[no_mangle]
-pub unsafe extern "system" fn DllGetClassObject(clsid: *const Guid, _iid: *const Guid, ppv: *mut *mut c_void) -> i32 {
-    *ppv = core::ptr::null_mut();
-    if COM_CLASSES.iter().any(|c| *c == *clsid) {
-        return E_NOTIMPL;
+pub unsafe extern "system" fn DllGetClassObject(clsid: *const Guid, iid: *const Guid, ppv: *mut *mut c_void) -> i32 {
+    match console_image::symbol(console_module(), "DllGetClassObject") {
+        Some(p) => {
+            let f: ClassObjectFn = core::mem::transmute(p);
+            f(clsid, iid, ppv)
+        }
+        None => {
+            if !ppv.is_null() {
+                *ppv = core::ptr::null_mut();
+            }
+            CONSOLE.missing("DllGetClassObject", CLASS_E_CLASSNOTAVAILABLE as u32 as usize);
+            CLASS_E_CLASSNOTAVAILABLE
+        }
     }
-    CLASS_E_CLASSNOTAVAILABLE
 }
 
 #[no_mangle]
 pub extern "system" fn DllCanUnloadNow() -> i32 {
-    if OBJECT_COUNT.load(Ordering::Acquire) == 0 {
-        S_OK
-    } else {
-        S_FALSE
+    match console_image::symbol(loaded_module(), "DllCanUnloadNow") {
+        Some(p) => unsafe {
+            let f: CanUnloadFn = core::mem::transmute(p);
+            f()
+        },
+        None => S_OK,
     }
 }
 

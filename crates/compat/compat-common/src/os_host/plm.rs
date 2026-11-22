@@ -50,7 +50,39 @@ fn tid() -> u32 {
     unsafe { GetCurrentThreadId() }
 }
 
+fn owner_entry(var: &str, own: usize) -> Option<usize> {
+    if super::is_owner() {
+        return None;
+    }
+    let p = std::env::var(var).ok().and_then(|s| usize::from_str_radix(s.trim_start_matches("0x"), 16).ok())?;
+    (p != 0 && p != own).then_some(p)
+}
+
+pub unsafe extern "system" fn register_entry(kind: u32, routine: usize, context: usize, out: *mut u64) -> u32 {
+    register_local(if kind == 0 { Kind::AppState } else { Kind::Constrained }, routine, context, out)
+}
+
+pub unsafe extern "system" fn unregister_entry(kind: u32, id: u64) -> u32 {
+    unregister_local(if kind == 0 { Kind::AppState } else { Kind::Constrained }, id)
+}
+
 pub fn register(kind: Kind, routine: usize, context: usize, out: *mut u64) -> u32 {
+    if let Some(p) = owner_entry(super::REGISTER_VAR, register_entry as *const () as usize) {
+        let f: unsafe extern "system" fn(u32, usize, usize, *mut u64) -> u32 = unsafe { core::mem::transmute(p) };
+        return unsafe { f(kind as u32, routine, context, out) };
+    }
+    register_local(kind, routine, context, out)
+}
+
+pub fn unregister(kind: Kind, id: u64) -> u32 {
+    if let Some(p) = owner_entry(super::UNREGISTER_VAR, unregister_entry as *const () as usize) {
+        let f: unsafe extern "system" fn(u32, u64) -> u32 = unsafe { core::mem::transmute(p) };
+        return unsafe { f(kind as u32, id) };
+    }
+    unregister_local(kind, id)
+}
+
+fn register_local(kind: Kind, routine: usize, context: usize, out: *mut u64) -> u32 {
     if out.is_null() {
         return ERROR_INVALID_PARAMETER;
     }
@@ -64,7 +96,7 @@ pub fn register(kind: Kind, routine: usize, context: usize, out: *mut u64) -> u3
     ERROR_SUCCESS
 }
 
-pub fn unregister(kind: Kind, id: u64) -> u32 {
+fn unregister_local(kind: Kind, id: u64) -> u32 {
     let found = {
         let mut r = regs().lock().unwrap_or_else(|e| e.into_inner());
         match r.iter().position(|e| e.id == id && e.kind == kind) {

@@ -12,9 +12,6 @@ pub const IOCTL_HANDSHAKE: u32 = 0x7900_c190;
 pub const IOCTL_RELEASE: u32 = 0x7900_c194;
 
 extern "system" {
-    fn CreateFileW(name: *const u16, access: u32, share: u32, sa: *mut c_void, disp: u32, flags: u32, tmpl: isize) -> isize;
-    fn DeviceIoControl(h: isize, code: u32, inb: *const c_void, inl: u32, outb: *mut c_void, outl: u32, ret: *mut u32, ov: *mut c_void) -> i32;
-    fn CloseHandle(h: isize) -> i32;
     fn GetLastError() -> u32;
     fn GetModuleHandleW(n: *const u16) -> *mut c_void;
     fn GetProcAddress(h: *mut c_void, n: *const u8) -> *mut c_void;
@@ -86,15 +83,15 @@ pub fn direct_enabled() -> bool {
 }
 
 pub unsafe fn create() -> isize {
-    CreateFileW(wide(KMD_PATH).as_ptr(), 0xc000_0000, 0, null_mut(), 2, 0x80, 0)
+    xgs_kmd_emu::open()
 }
 
 pub unsafe fn close_handle(h: isize) {
-    CloseHandle(h);
+    xgs_kmd_emu::close(h);
 }
 
 pub unsafe fn ioctl(h: isize, code: u32, inb: *const c_void, inl: u32, outb: *mut c_void, outl: u32, ret: &mut u32) -> bool {
-    DeviceIoControl(h, code, inb, inl, outb, outl, ret, null_mut()) != 0
+    xgs_kmd_emu::device_io_control(h, code, inb, inl, outb, outl, ret)
 }
 
 pub fn last_error() -> i32 {
@@ -132,7 +129,7 @@ pub unsafe fn open(out: *mut isize, handshake: bool) -> i32 {
                     0
                 };
                 if st < 0 {
-                    CloseHandle(f);
+                    close_handle(f);
                     hr = st;
                     keep = false;
                 }
@@ -156,7 +153,7 @@ pub unsafe fn release(h: isize) -> i32 {
             if !ioctl(h, IOCTL_RELEASE, null(), 0, null_mut(), 0, &mut ret) {
                 GetLastError();
             }
-            CloseHandle(h);
+            close_handle(h);
         }
     }
     unlock();
@@ -217,22 +214,32 @@ mod tests {
     }
 
     #[test]
-    fn open_rejects_null_and_reports_missing_driver() {
+    fn open_uses_the_emulated_device() {
+        let _g = test_serial();
         assert_eq!(unsafe { open(null_mut(), false) }, E_INVALIDARG);
-        let mut h = 0isize;
-        let hr = unsafe { open(&mut h, false) };
-        assert_eq!(hr, 0x8007_0002u32 as i32);
-        assert_eq!(h, 0);
-        assert_eq!(cached(), INVALID);
+        let mut h = INVALID;
+        assert_eq!(unsafe { open(&mut h, true) }, 0);
+        assert!(xgs_kmd_emu::is_device(h));
+        assert_eq!(cached(), h);
         assert!(!direct_enabled());
-    }
-
-    #[test]
-    fn wrappers_fail_like_console_without_driver() {
+        let mut out = [0u8; 0x10];
+        let mut ret = 0u32;
+        assert!(unsafe { ioctl(h, 0x7900_c1fc, null(), 0, out.as_mut_ptr().cast(), 0x10, &mut ret) });
+        assert_eq!(ret, 0x10);
+        assert_eq!(out, xgs_kmd_emu::gpu_reply(xgs_kmd_emu::device_type()));
         let buf = [0u8; 0x40];
         assert_eq!(unsafe { call_cached(0x7900_c20b, buf.as_ptr().cast(), 0x20, null_mut(), 0) }, STATUS_UNSUCCESSFUL);
         assert_eq!(unsafe { call_opened(0x7900_c21b, buf.as_ptr().cast(), 0x18, null_mut(), 0) }, STATUS_UNSUCCESSFUL);
         assert_eq!(unsafe { call_device(0x7900_c273, buf.as_ptr().cast(), 0x18) }, STATUS_UNSUCCESSFUL);
+        assert_eq!(unsafe { release(h) }, 0);
+        assert_eq!(cached(), INVALID);
+        assert!(!xgs_kmd_emu::is_device(h));
         assert_eq!(unsafe { release(INVALID) }, 0);
     }
+}
+
+#[cfg(test)]
+pub fn test_serial() -> std::sync::MutexGuard<'static, ()> {
+    static SERIAL: std::sync::Mutex<()> = std::sync::Mutex::new(());
+    SERIAL.lock().unwrap_or_else(|e| e.into_inner())
 }

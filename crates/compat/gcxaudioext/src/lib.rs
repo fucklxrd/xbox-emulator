@@ -3,6 +3,7 @@ use core::ffi::c_void;
 pub mod acp_state;
 pub mod loudness;
 pub mod xapo_format;
+pub mod xma_engine;
 
 pub const XAUDIO2_DEFAULT_PROCESSOR: u32 = 0x20;
 pub const DEBUG_CONFIGURATION_OFFSET: usize = 0x390;
@@ -228,3 +229,5 @@ mod acp_tests;
 mod loudness_tests;
 #[cfg(test)]
 pub(crate) mod diagveh;
+#[cfg(test)]
+mod xma_engine_tests;

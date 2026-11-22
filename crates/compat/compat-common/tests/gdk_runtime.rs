@@ -90,6 +90,7 @@ fn real_dump_layouts_parse_when_present() {
 }
 
 #[test]
+#[cfg_attr(not(tombox_analysis_gdk), ignore = "needs analysis/gdk call-site maps from local title dumps")]
 fn every_title_call_site_is_served_or_forwarded() {
     let imp = gdk::implemented();
     let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../../analysis/gdk");

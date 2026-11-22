@@ -1,5 +1,10 @@
-#![cfg(tombox_backend_data)]
+#[cfg(not(tombox_backend_data))]
+#[test]
+#[ignore = "needs crates/compat/compat-common/backend_data"]
+fn online_websocket_needs_backend_data() {}
 
+#[cfg(tombox_backend_data)]
+mod backend {
 use std::io::{BufRead, BufReader, Read, Write};
 use std::net::TcpStream;
 use std::time::Duration;
@@ -74,4 +79,5 @@ fn plain_http_still_works_and_extra_routes() {
     let mut out = String::new();
     s.read_to_string(&mut out).unwrap();
     assert!(out.starts_with("HTTP/1.1 204"), "{out}");
+}
 }

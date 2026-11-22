@@ -25,8 +25,8 @@
 2558 GetMessageTime implemented | console body: SetLastError(E_NOTIMPL 0x80004001), returns 0; reproduced exactly (not forwarded: PC user32 implements it)
 2559 GetMessageW implemented | console api.cpp GetMessageW: zeroes the MSG, waits on the thread queue (queue.rs), returns -1 on failure, 0 for WM_QUIT, else 1 (a dead hwnd filter fails with the PC code 1400, not verified against the console); reads the minuserx console-order queue first, then user32 input/paint/timer
 2560 GetWindowLongA forwarded | PE forwarder to user32.GetWindowLongW; console GetWindowLongA is a jmp to (or alias of) GetWindowLongW with no ANSI conversion
-2561 GetWindowLongPtrA forwarded | PE forwarder to user32.GetWindowLongPtrW; console GetWindowLongPtrA is a jmp to (or alias of) GetWindowLongPtrW with no ANSI conversion
-2562 GetWindowLongPtrW forwarded | PE forwarder to user32.GetWindowLongPtrW; same Win32 signature, windows are real PC user32 windows
+2561 GetWindowLongPtrA implemented | console GetWindowLongPtrA is the same code as GetWindowLongPtrW (no ANSI/Unicode split); here both read through the user32 variant matching the window charset (IsWindowUnicode), so GWLP_WNDPROC returns the registered proc for ANSI (CreateWindowExA/RegisterClassExA) and Unicode windows alike instead of a CallWindowProc handle
+2562 GetWindowLongPtrW implemented | same code as GetWindowLongPtrA: user32 variant chosen by IsWindowUnicode, so GWLP_WNDPROC returns the registered proc on ANSI and Unicode windows as on the console
 2563 GetWindowLongW forwarded | PE forwarder to user32.GetWindowLongW; same Win32 signature, windows are real PC user32 windows
 2564 InSendMessage implemented | console body: SetLastError(E_NOTIMPL 0x80004001), returns 0; reproduced exactly (not forwarded: PC user32 implements it)
 2565 InSendMessageEx implemented | console body: SetLastError(E_NOTIMPL 0x80004001), returns 0; reproduced exactly (not forwarded: PC user32 implements it)
@@ -62,8 +62,8 @@
 2595 SetMessageExtraInfo implemented | console body: SetLastError(E_NOTIMPL 0x80004001), returns 0; reproduced exactly (not forwarded: PC user32 implements it)
 2596 SetTimer forwarded | PE forwarder to user32.SetTimer; same Win32 signature, windows are real PC user32 windows
 2597 SetWindowLongA forwarded | PE forwarder to user32.SetWindowLongW; console SetWindowLongA is a jmp to (or alias of) SetWindowLongW with no ANSI conversion
-2598 SetWindowLongPtrA forwarded | PE forwarder to user32.SetWindowLongPtrW; console SetWindowLongPtrA is a jmp to (or alias of) SetWindowLongPtrW with no ANSI conversion
-2599 SetWindowLongPtrW forwarded | PE forwarder to user32.SetWindowLongPtrW; same Win32 signature, windows are real PC user32 windows
+2598 SetWindowLongPtrA implemented | console SetWindowLongPtrA is the same code as SetWindowLongPtrW; here both write through the user32 variant matching the window charset (IsWindowUnicode), so a new GWLP_WNDPROC neither changes the window charset nor is wrapped in a conversion thunk
+2599 SetWindowLongPtrW implemented | same code as SetWindowLongPtrA: user32 variant chosen by IsWindowUnicode
 2600 SetWindowLongW forwarded | PE forwarder to user32.SetWindowLongW; same Win32 signature, windows are real PC user32 windows
 2601 SetWindowPos forwarded | PE forwarder to user32.SetWindowPos; same Win32 signature, windows are real PC user32 windows
 2602 ShowCursor forwarded | PE forwarder to user32.ShowCursor; console keeps one process-wide counter, PC keeps it per input thread (see os_host coverage.rs)

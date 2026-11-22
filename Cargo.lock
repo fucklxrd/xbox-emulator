@@ -125,6 +125,7 @@ name = "d3d12_x"
 version = "0.1.0"
 dependencies = [
  "compat-common",
+ "xgs-kmd-emu",
  "xone-exports",
 ]
 
@@ -134,6 +135,7 @@ version = "0.1.0"
 dependencies = [
  "compat-common",
  "tombox-xshader",
+ "xgs-kmd-emu",
 ]
 
 [[package]]
@@ -188,6 +190,8 @@ dependencies = [
 name = "gamecoreclient"
 version = "0.1.0"
 dependencies = [
+ "console-image",
+ "console-sandbox",
  "xone-exports",
 ]
 
@@ -217,6 +221,7 @@ dependencies = [
 name = "gcxaudioext"
 version = "0.1.0"
 dependencies = [
+ "xma",
  "xone-exports",
 ]
 
@@ -226,6 +231,7 @@ version = "0.1.0"
 dependencies = [
  "compat-common",
  "console-image",
+ "xone-exports",
 ]
 
 [[package]]
@@ -276,6 +282,10 @@ dependencies = [
 [[package]]
 name = "kerneltracecontrol"
 version = "0.1.0"
+dependencies = [
+ "console-image",
+ "xone-exports",
+]
 
 [[package]]
 name = "lazy_static"
@@ -331,7 +341,17 @@ name = "mfplat"
 version = "0.1.0"
 dependencies = [
  "compat-common",
+ "console-image",
+ "console-sandbox",
  "windows",
+]
+
+[[package]]
+name = "minappmodelx"
+version = "0.1.0"
+dependencies = [
+ "compat-common",
+ "xone-exports",
 ]
 
 [[package]]
@@ -798,6 +818,7 @@ name = "xaudio2_9"
 version = "0.1.0"
 dependencies = [
  "compat-common",
+ "gcxaudioext",
  "xma",
 ]
 
@@ -898,6 +919,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "xgs-kmd-emu"
+version = "0.1.0"
+dependencies = [
+ "compat-common",
+]
+
+[[package]]
 name = "xgs12"
 version = "0.1.0"
 dependencies = [
@@ -961,6 +989,7 @@ version = "0.1.0"
 name = "xhost"
 version = "0.1.0"
 dependencies = [
+ "dab",
  "serde_json",
  "tombox-pe",
 ]
@@ -1004,6 +1033,14 @@ dependencies = [
 [[package]]
 name = "xtfcommon"
 version = "0.1.0"
+
+[[package]]
+name = "xtfdebugmonitor"
+version = "0.1.0"
+dependencies = [
+ "xtfcommon",
+ "xtfmsg",
+]
 
 [[package]]
 name = "xtfdiaginfo"
@@ -1050,6 +1087,9 @@ dependencies = [
 name = "xvmaudioservice"
 version = "0.1.0"
 dependencies = [
+ "compat-common",
+ "console-image",
+ "console-sandbox",
  "xone-exports",
 ]
 

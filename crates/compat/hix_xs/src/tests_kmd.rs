@@ -1,7 +1,7 @@
 use super::*;
 use crate::console::{map_path, Mapped};
 
-fn scratch() -> std::path::PathBuf {
+pub(crate) fn scratch() -> std::path::PathBuf {
     static S: std::sync::OnceLock<std::path::PathBuf> = std::sync::OnceLock::new();
     S.get_or_init(|| {
         let d = std::env::temp_dir().join(format!("hix_xs_scratch_{}", std::process::id()));
@@ -71,9 +71,10 @@ fn initialize_and_terminate_run_the_console_code_against_the_emulated_kmd() {
     unsafe {
         let mb = kmd::region1() as *mut u8;
         (mb.add(BLOB_COUNT) as *mut u32).write_unaligned(7);
-        assert_eq!(InitializeHix(0), 0);
+        let first = crate::tests::init_hix(0);
         assert!(kmd::armed().is_some());
-        assert_eq!((mb.add(BLOB_COUNT) as *const u32).read_unaligned(), 0);
+        assert_eq!((mb.add(BLOB_COUNT) as *const u32).read_unaligned(), if first { 0 } else { 7 });
+        (mb.add(BLOB_COUNT) as *mut u32).write_unaligned(0);
         set_region1(mb);
         assert_eq!(SaveDeveloperBlobInfo(0xabc0, 0x20), 0);
         assert_eq!((mb.add(BLOB_COUNT) as *const u32).read_unaligned(), 1);

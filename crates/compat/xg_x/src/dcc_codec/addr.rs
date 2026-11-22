@@ -1,8 +1,5 @@
 use super::bits::{copy_bit, insert_bits, log2c, mask, remove_bits, shr_keep};
 use super::Dcc;
-use std::sync::Mutex;
-
-pub(crate) static SCRATCH: Mutex<[u8; 64]> = Mutex::new([0; 64]);
 
 const X: u8 = 0;
 const Y: u8 = 1;
@@ -194,7 +191,7 @@ pub(crate) fn index_1c960(d: &Dcc, c: &[u32; 5], ordering: u32) -> u32 {
 
 pub(crate) fn reorder_1dd10(d: &mut Dcc, dst: usize, src: usize, ordering: u32) {
     let from = d.s[src];
-    let mut scratch = SCRATCH.lock().unwrap_or_else(|e| e.into_inner());
+    let mut scratch = d.sc;
     for s in 0..4u32 {
         if d.g(0x38) >> s & 1 == 0 {
             continue;
@@ -207,5 +204,6 @@ pub(crate) fn reorder_1dd10(d: &mut Dcc, dst: usize, src: usize, ordering: u32) 
         }
         d.s[dst][(s * 64) as usize..(s * 64 + 64) as usize].copy_from_slice(&scratch[..]);
     }
+    d.sc = scratch;
     d.p(0xb0, ordering);
 }

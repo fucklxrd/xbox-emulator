@@ -19,12 +19,24 @@ pub fn summary_stream() -> Vec<u8> {
     s
 }
 
-pub unsafe fn respond(cmd: u32, data: usize, _mailbox: usize) -> Option<u32> {
+pub const E_NOTIMPL: u32 = 0x8000_4001;
+
+pub const CMD_DISARM: u32 = 0x17;
+pub const CMD_HALT_WAVES: u32 = 0x28;
+pub const CMD_UNHALT_WAVES: u32 = 0x29;
+pub const CMD_SQ_DUMP: u32 = 0x14;
+pub const CMD_LIVE_DEBUG: u32 = 0x1b;
+
+pub fn served(cmd: u32) -> bool {
+    matches!(cmd, CMD_HANG_SUMMARY | CMD_DISARM | CMD_HALT_WAVES | CMD_UNHALT_WAVES)
+}
+
+pub unsafe fn respond(cmd: u32, data: usize, _mailbox: usize) -> (u32, u32) {
     if cmd != CMD_HANG_SUMMARY {
-        return None;
+        return if served(cmd) { (0, 0) } else { (E_NOTIMPL, 0) };
     }
     ((data + VERSION_OFFSET) as *mut u32).write_volatile(STREAM_VERSION);
     let s = summary_stream();
     core::ptr::copy_nonoverlapping(s.as_ptr(), (data + STREAM_OFFSET) as *mut u8, s.len());
-    Some(s.len() as u32)
+    (0, s.len() as u32)
 }

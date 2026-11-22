@@ -22,11 +22,13 @@ extern "system" {
 
 pub const OWNER_VAR: &str = "TOMBOX_OSHOST_OWNER";
 pub const SIGNAL_VAR: &str = "TOMBOX_OSHOST_SIGNAL";
+pub const REGISTER_VAR: &str = "TOMBOX_OSHOST_PLM_REGISTER";
+pub const UNREGISTER_VAR: &str = "TOMBOX_OSHOST_PLM_UNREGISTER";
 
 const AFF_DLLS: &[&str] = &["api-ms-win-core-processtopology-", "kernel32.dll", "kernelbase.dll"];
 const THREAD_DLLS: &[&str] = &["api-ms-win-core-processthreads-", "kernel32.dll", "kernelbase.dll"];
 const DIR_DLLS:&[&str] = &["api-ms-win-core-kernel32-legacy-", "api-ms-win-core-libraryloader-", "kernel32.dll", "kernelbase.dll"];
-const PLM_DLLS: &[&str] = &["api-ms-win-core-psm-appnotify-", "twinapi.appcore.dll", "kernel.appcore.dll"];
+const PLM_DLLS: &[&str] = &["twinapi.appcore.dll", "kernel.appcore.dll"];
 
 pub unsafe fn resolve(dll: &str, func: &str) -> *mut c_void {
     let w: Vec<u16> = dll.encode_utf16().chain(Some(0)).collect();
@@ -163,6 +165,8 @@ unsafe fn install() {
     }
     std::env::set_var(OWNER_VAR, &marker);
     std::env::set_var(SIGNAL_VAR, format!("{:x}", plm::signal_entry as *const () as usize));
+    std::env::set_var(REGISTER_VAR, format!("{:x}", plm::register_entry as *const () as usize));
+    std::env::set_var(UNREGISTER_VAR, format!("{:x}", plm::unregister_entry as *const () as usize));
     let topo = affinity::topology();
     crate::record_raw("os_host", "affinity", &topo.describe());
     crate::record_raw("os_host", "dlldir", &dlldir::check());

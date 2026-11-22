@@ -2,7 +2,7 @@
 2 ConfigureNBPMCs implemented | pixrt table slot 9; returns 0 when no PIX runtime is attached
 3 ConfigurePMCs implemented | pixrt table slot 8; returns 0 when no PIX runtime is attached
 4 GetCaptureControlState implemented | pixrt table slot 6; returns 0 when no PIX runtime is attached
-5 PIXBeginCapture1 implemented | returns E_NOTIMPL, identical to console pixevt
+5 PIXBeginCapture1 stub | fixed failure, no work done: returns E_NOTIMPL, identical to console pixevt
 6 PIXBeginCapture2 implemented | pixrt table slot 0 tail call; E_UNEXPECTED without a PIX runtime
 7 PIXEndCapture implemented | pixrt table slot 1 tail call; E_UNEXPECTED without a PIX runtime
 8 PIXEventsReplaceBlock implemented | pixrt table slot 7; returns 0 when no PIX runtime is attached

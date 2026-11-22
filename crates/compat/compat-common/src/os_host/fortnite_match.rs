@@ -38,12 +38,14 @@ pub enum Mode {
     Play,
 }
 
+pub const DEFAULT_MODE: Mode = Mode::Play;
+
 pub fn parse_mode(v: Option<&str>) -> Mode {
     match v.map(|s| s.trim().to_ascii_lowercase()).as_deref() {
         Some("replay") => Mode::Replay,
         Some("map") => Mode::Map,
-        Some("play") => Mode::Play,
-        _ => Mode::Off,
+        Some("off") | Some("0") | Some("none") | Some("false") | Some("disabled") => Mode::Off,
+        _ => DEFAULT_MODE,
     }
 }
 
@@ -322,7 +324,8 @@ pub fn apply() {
         Err(e) => crate::record_raw("fn-match", "StartGameInstance", &format!("bytes mismatch {e}")),
     }
     let (sh, sp) = sentinel();
-    crate::record_raw("fn-match", "mode", &format!("{m:?} map={} game={} playlist={} sentinel={sh}:{sp}", map(), gamemode(), playlist()));
+    let raw = std::env::var("TOMBOX_FN_MATCH").unwrap_or_else(|_| "<unset>".into());
+    crate::record_raw("fn-match", "mode", &format!("{m:?} (TOMBOX_FN_MATCH={raw}) map={} game={} playlist={} sentinel={sh}:{sp}", map(), gamemode(), playlist()));
     if m == Mode::Play {
         match unsafe { install_browse(base) } {
             Ok(n) => crate::record_raw("fn-match", "browse", &format!("hooked UEngine::Browse at {:#x} in {n} vtables", base + BROWSE_RVA)),
@@ -393,7 +396,11 @@ mod tests {
         assert_eq!(parse_mode(Some("replay")), Mode::Replay);
         assert_eq!(parse_mode(Some("MAP")), Mode::Map);
         assert_eq!(parse_mode(Some("off")), Mode::Off);
-        assert_eq!(parse_mode(None), Mode::Off);
+        assert_eq!(parse_mode(Some(" OFF ")), Mode::Off);
+        assert_eq!(parse_mode(Some("0")), Mode::Off);
+        assert_eq!(parse_mode(None), Mode::Play);
+        assert_eq!(parse_mode(Some("")), Mode::Play);
+        assert_eq!(DEFAULT_MODE, Mode::Play);
     }
 
     struct Pe {

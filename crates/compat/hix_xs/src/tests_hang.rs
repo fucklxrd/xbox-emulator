@@ -50,7 +50,7 @@ fn console_collect_hang_summary_reports_no_faults() {
         return;
     }
     unsafe {
-        assert_eq!(InitializeHix(sink as *const () as usize), 0);
+        crate::tests::init_hix(sink as *const () as usize);
         LOG.lock().unwrap().clear();
         let ctx = [0u8; 0x60];
         let mut report = vec![0u8; 0x1000];

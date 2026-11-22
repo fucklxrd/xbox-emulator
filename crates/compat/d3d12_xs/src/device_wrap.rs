@@ -106,6 +106,7 @@ unsafe extern "system" fn addref(this: *mut DeviceWrapper) -> u32 {
 unsafe extern "system" fn release(this: *mut DeviceWrapper) -> u32 {
     let n = unsafe { (*this).refs.fetch_sub(1, Ordering::SeqCst) } - 1;
     if n == 0 {
+        unregister_wrapper(this as usize);
         unsafe {
             let real = (*this).real;
             let rvt = real_vtbl(real);
@@ -301,9 +302,40 @@ unsafe extern "system" fn get_resource_alloc_info(
 ) -> AllocInfo {
     static N: core::sync::atomic::AtomicUsize = core::sync::atomic::AtomicUsize::new(0);
     let n = N.fetch_add(1, Ordering::Relaxed);
+    let _ = (this, visible_mask);
+    if num_descs == 0 {
+        return AllocInfo { size: 0, align: 1 };
+    }
     if pdescs.is_null() {
-        if n < 20 { record("d3d12_xs", "GetResourceAllocationInfo", &format!("numDescs={num_descs} pDescs=NULL -> default{{64KB,64KB}}")); }
-        return AllocInfo { size: 0x10000, align: 0x10000 };
+        record("d3d12_xs", "GetResourceAllocationInfo", &format!("numDescs={num_descs} pDescs=NULL -> {{0,0}}, the release driver's failure value"));
+        return AllocInfo { size: 0, align: 0 };
+    }
+    let fam = crate::device_console_fix::title_family();
+    let raw = unsafe { core::slice::from_raw_parts(pdescs as *const u8, num_descs as usize * crate::device_console_fix::RES_DESC_SIZE) };
+    if crate::device_console_fix::xg_available(fam) {
+        let mut why: Vec<String> = Vec::new();
+        let console = crate::device_console_fix::alloc_info_with(raw, num_descs as usize, |d| {
+            let xg = crate::device_console_fix::xg_texture_alloc(d, fam);
+            if let Err(hr) = xg {
+                why.push(format!("{} {:#010x}", desc_str(d), hr as u32));
+            }
+            crate::device_console_fix::texture_part(xg, || console_desc_estimate(d))
+        });
+        static GAP: core::sync::atomic::AtomicUsize = core::sync::atomic::AtomicUsize::new(0);
+        if n < 8 || console == (0, 0) || (!why.is_empty() && GAP.fetch_add(1, Ordering::Relaxed) < 32) {
+            let tail = if why.is_empty() {
+                String::new()
+            } else if console == (0, 0) {
+                format!(": XG rejected [{}], the console driver's {{0,0}} failure value", why.join("; "))
+            } else {
+                format!(": emulated XG lacks [{}], 64 KiB tile over-estimate used for those desc(s)", why.join("; "))
+            };
+            record("d3d12_xs", "GetResourceAllocationInfo", &format!("{fam:?} XG layout for {num_descs} desc(s) -> size={:#x} align={:#x}{tail}", console.0, console.1));
+        }
+        return AllocInfo { size: console.0, align: console.1 };
+    }
+    if n < 20 {
+        record("d3d12_xs", "GetResourceAllocationInfo", &format!("{fam:?} XGCreateTextureComputer unavailable or failed; using the 64 KiB tile over-estimate"));
     }
     // Copy and sanitize the desc(s): Xbox may leave SampleDesc.Count / DepthOrArraySize
     // / MipLevels as 0, which are invalid on PC D3D12 and crash GetResourceAllocationInfo.
@@ -315,8 +347,8 @@ unsafe extern "system" fn get_resource_alloc_info(
     // sees zeros, not adjacent heap garbage.
     let mut descs: Vec<u8> = vec![0u8; count * 0x48];
     for i in 0..count {
-        let src = unsafe { core::slice::from_raw_parts(pdescs.cast::<u8>().add(i * 0x40), 0x40) };
-        descs[i * 0x48..i * 0x48 + 0x40].copy_from_slice(src);
+        let src = unsafe { core::slice::from_raw_parts(pdescs.cast::<u8>().add(i * 0x38), 0x38) };
+        descs[i * 0x48..i * 0x48 + 0x38].copy_from_slice(src);
         let b = &mut descs[i * 0x48..];
         let u16at = |b: &[u8], o: usize| u16::from_le_bytes([b[o], b[o + 1]]);
         let u32at = |b: &[u8], o: usize| u32::from_le_bytes([b[o], b[o + 1], b[o + 2], b[o + 3]]);
@@ -364,6 +396,14 @@ unsafe extern "system" fn get_resource_alloc_info(
     }
     let _ = (this, visible_mask);
     info
+}
+
+fn console_desc_estimate(d: &[u8]) -> (u64, u64) {
+    let u16at = |o: usize| u16::from_le_bytes([d[o], d[o + 1]]) as u64;
+    let u32at = |o: usize| u32::from_le_bytes(d[o..o + 4].try_into().unwrap());
+    let width = u64::from_le_bytes(d[0x10..0x18].try_into().unwrap()).max(1);
+    let size = alloc_size_for(u32at(0), width, (u32at(0x18) as u64).max(1), u16at(0x1c).max(1), u16at(0x1e).max(1), u32at(0x20), (u32at(0x24) as u64).max(1));
+    (size, 0x10000)
 }
 
 /// Bytes per pixel for the common DXGI formats (block-compressed reported as their
@@ -470,6 +510,15 @@ unsafe extern "system" fn create_committed_resource(
         desc_copy.as_ptr() as *const u32
     };
     let init_state = if pheap.is_null() { init_state } else { crate::xone_tex::committed_state(unsafe { *pheap }, init_state) };
+    let init_state = if pdesc.is_null() { init_state } else { crate::xone_barrier::initial_state(unsafe { *pdesc }, init_state) };
+    let mut heap_words = [0u32; 5];
+    let pheap = if pheap.is_null() {
+        pheap
+    } else {
+        unsafe { core::ptr::copy_nonoverlapping(pheap, heap_words.as_mut_ptr(), 5) };
+        heap_words = crate::device_console_fix::pc_heap_words(heap_words);
+        heap_words.as_ptr()
+    };
     let hr = unsafe { f(real, pheap, heap_flags, desc_ptr, init_state, pclear, use_riid, ppv) };
     if hr >= 0 && !ppv.is_null() {
         crate::map_x::ensure_patched(unsafe { *ppv });
@@ -571,8 +620,6 @@ unsafe extern "system" fn dev_stub() -> i32 {
 /// bytecode (see `shader_xlat`), patch a copy of the desc, and create a real PC PSO.
 /// If any stage cannot be translated the PSO honestly fails (no placeholder shaders).
 /// Signature (from the RHI call site at EXE+0xd5564c): `(this, pDesc, numExt, pExtDesc, riid, ppv)`
-/// — the Xbox variant carries an extra extension-struct array, which has no PC equivalent
-/// and is currently ignored (logged once).
 unsafe fn bisect_gfx_pso(real: *mut c_void, desc: &[u8], riid: *const Guid) -> String {
     let f: unsafe extern "system" fn(*mut c_void, *const u8, *const Guid, *mut *mut c_void) -> i32 =
         unsafe { core::mem::transmute(*real_vtbl(real).add(10)) };
@@ -652,10 +699,12 @@ unsafe extern "system" fn create_gfx_pso_x(
     let stage_rtfmt = |stage: &str, desc: &[u8]| if stage == "PS" {
         let u32at = |o: usize| u32::from_le_bytes(desc[o..o + 4].try_into().unwrap());
         let fmts: [u32; 8] = core::array::from_fn(|i| u32at(0x244 + 4 * i));
-        crate::shader_xlat::export_formats(u32at(0x240), &fmts)
+        crate::centroid_bind::tag_rtfmt(rd(desc, 0), crate::shader_xlat::export_formats(u32at(0x240), &fmts))
     } else {
         [0; 8]
     };
+    let ps_opts = if _pext.is_null() || _num_ext == 0 { None } else { crate::pso_ext::ps::options_in_entries(unsafe { core::slice::from_raw_parts(_pext, _num_ext as usize * crate::pso_ext::EXT_STRIDE) }, _num_ext as usize) };
+    let mut ps_origin: Option<crate::pso_ext::ps::PsOrigin> = None;
     let stages = [("VS", 0x08usize), ("PS", 0x18), ("DS", 0x28), ("HS", 0x38), ("GS", 0x48)];
     for &(stage, off) in stages.iter().filter(|&&(_, o)| rd(&desc, o) != 0 && rd(&desc, o + 8) != 0).skip(1) {
         unsafe { crate::shader_xlat::prefetch(rd(&desc, off) as *const u8, rd(&desc, off + 8) as usize, stage_rtfmt(stage, &desc)) };
@@ -668,6 +717,15 @@ unsafe extern "system" fn create_gfx_pso_x(
         let rtfmt = stage_rtfmt(stage, &desc);
         match unsafe { crate::shader_xlat::translate_for_targets(p, n, rtfmt) } {
             Ok(code) => {
+                let code = if stage == "PS" {
+                    ps_origin = crate::pso_ext::ps::origin_from_blob(p, n, rtfmt, ps_opts.unwrap_or_default());
+                    match (ps_opts, &ps_origin) {
+                        (Some(_), Some(o)) => crate::pso_ext::ps::variant(o, crate::pso_ext::ps::depth_stencil_writes(&desc)).unwrap_or(code),
+                        _ => code,
+                    }
+                } else {
+                    code
+                };
                 desc[off..off + 8].copy_from_slice(&(code.as_ptr() as u64).to_le_bytes());
                 desc[off + 8..off + 16].copy_from_slice(&(code.len() as u64).to_le_bytes());
                 keep.push(code);
@@ -743,7 +801,11 @@ unsafe extern "system" fn create_gfx_pso_x(
             unsafe { core::mem::transmute(*real_vtbl(real).add(10)) };
         unsafe { crate::cl2_state::patch_gfx_pso_desc(real, &mut desc) };
         let t0 = std::time::Instant::now();
-        let hr = crate::perf::timed(crate::perf::PSO, || unsafe { f(real, desc.as_ptr(), riid, ppv) });
+        let hr = crate::perf::timed(crate::perf::PSO, || unsafe { crate::pso_ext::create(real, &desc, _num_ext, _pext, riid, ppv).unwrap_or_else(|| f(real, desc.as_ptr(), riid, ppv)) });
+        if hr >= 0 && !ppv.is_null() {
+            unsafe { crate::pso_ext::note(*ppv, _num_ext, _pext) };
+            crate::pso_ext::ps::note_pso(unsafe { *ppv }, ps_origin.clone());
+        }
         let drv_ms = t0.elapsed().as_secs_f64() * 1000.0;
         if drv_ms > 30.0 {
             static SLOW: core::sync::atomic::AtomicUsize = core::sync::atomic::AtomicUsize::new(0);
@@ -881,9 +943,12 @@ unsafe extern "system" fn real_create_root_signature(real: *mut c_void, mask: u3
     let stripped = unsafe { crate::rs_xbox::pc_blob_raw(blob, len) };
     let (blob, len) = stripped.as_ref().map_or((blob, len), |b| (b.as_ptr(), b.len()));
     let mut gds = unsafe { crate::gds::patch_root_signature(blob, len) };
-    let mut hr = match &gds {
-        Some((b, _)) => unsafe { f(real, mask, b.as_ptr(), b.len(), riid, ppv) },
-        None => unsafe { f(real, mask, blob, len, riid, ppv) },
+    let (gb, gl) = gds.as_ref().map_or((blob, len), |(b, _)| (b.as_ptr(), b.len()));
+    let cen = unsafe { crate::centroid_bind::create(gb, gl, &|b, l| f(real, mask, b, l, riid, ppv), ppv) };
+    let mut hr = match (&cen, &gds) {
+        (Some(hr), _) => *hr,
+        (None, Some((b, _))) => unsafe { f(real, mask, b.as_ptr(), b.len(), riid, ppv) },
+        (None, None) => unsafe { f(real, mask, blob, len, riid, ppv) },
     };
     if hr < 0 && gds.is_some() {
         record("d3d12_xs", "gds", &format!("root signature with the GDS parameter rejected hr={hr:#010x}; created without GDS"));
@@ -892,6 +957,7 @@ unsafe extern "system" fn real_create_root_signature(real: *mut c_void, mask: u3
     }
     if hr >= 0 && !ppv.is_null() {
         if let Some((_, idx)) = gds { crate::gds::note_root_signature(unsafe { *ppv }, idx) }
+        if cen.is_none() { crate::centroid_bind::forget(unsafe { *ppv }) }
     }
     if hr >= 0 && !ppv.is_null() && !blob.is_null() && len != 0 {
         crate::replay::note_root_signature(unsafe { *ppv } as usize, unsafe { core::slice::from_raw_parts(blob, len) });
@@ -1012,7 +1078,6 @@ unsafe extern "system" fn create_dsv_traced(this: *mut DeviceWrapper, res: *mut 
 /// struct (u32 tag, payload at +4) overriding one block of the base pipeline's state:
 ///   0 = D3D12_DEPTH_STENCIL_DESC (0x34)   1 = D3D12_RASTERIZER_DESC (0x2C)
 ///   2 = D3D12_BLEND_DESC (0x148)          3 = SampleMask (u32)
-///   5 = Xbox misc (stencil masks / flags) — no PC desc field; ignored.
 /// Tags/payload sizes are read off the code that fills them (FD3D12 CreatePipelineState).
 unsafe extern "system" fn create_derived_pso_x(
     this: *mut DeviceWrapper, base: *mut c_void, num: u32, patches: *const u8,
@@ -1032,35 +1097,40 @@ unsafe extern "system" fn create_derived_pso_x(
     };
     let mut desc = rec.desc.clone();
     let mut tags = String::new();
+    let mut ds_ext = crate::pso_ext::entry_of(base);
+    let mut ps_origin = crate::pso_ext::ps::origin_of(base);
+    let mut shaders = rec._shaders.clone();
     if !patches.is_null() {
-        for i in 0..(num as usize).min(16) {
-            let p = unsafe { patches.add(i * STRIDE) };
+        for i in 0..num as usize {
+            let p = unsafe { patches.add(i * crate::pso_ext::DERIVED_PATCH_STRIDE) };
             let tag = unsafe { core::ptr::read_unaligned(p as *const u32) };
             let payload = |n: usize| unsafe { core::slice::from_raw_parts(p.add(4), n) };
             tags.push_str(&format!("{tag} "));
-            match tag {
-                0 => {
-                    static T0: core::sync::atomic::AtomicUsize = core::sync::atomic::AtomicUsize::new(0);
-                    if u32::from_le_bytes(desc[0x264..0x268].try_into().unwrap()) != 0 && T0.fetch_add(1, Ordering::Relaxed) < 400 {
-                        let hex = payload(0x34).chunks(4).map(|c| format!("{:x}", u32::from_le_bytes(c.try_into().unwrap()))).collect::<Vec<_>>().join(" ");
-                        let u32at = |o: usize| u32::from_le_bytes(desc[o..o + 4].try_into().unwrap());
-                        record("d3d12_xs", "PSOFMT", &format!("tag0 numRT={} dsv={} payload[{hex}]", u32at(0x240), u32at(0x264)));
-                    }
-                    desc[0x1f0..0x1f0 + 0x34].copy_from_slice(payload(0x34))
+            if tag == 0 {
+                static T0: core::sync::atomic::AtomicUsize = core::sync::atomic::AtomicUsize::new(0);
+                if u32::from_le_bytes(desc[0x264..0x268].try_into().unwrap()) != 0 && T0.fetch_add(1, Ordering::Relaxed) < 400 {
+                    let hex = payload(0x34).chunks(4).map(|c| format!("{:x}", u32::from_le_bytes(c.try_into().unwrap()))).collect::<Vec<_>>().join(" ");
+                    let u32at = |o: usize| u32::from_le_bytes(desc[o..o + 4].try_into().unwrap());
+                    record("d3d12_xs", "PSOFMT", &format!("tag0 numRT={} dsv={} payload[{hex}]", u32at(0x240), u32at(0x264)));
                 }
-                1 => desc[0x1c4..0x1c4 + 0x2c].copy_from_slice(payload(0x2c)),
-                2 => desc[0x78..0x78 + 0x148].copy_from_slice(payload(0x148)),
-                3 => desc[0x1c0..0x1c4].copy_from_slice(payload(4)),
-                5 => {
-                    static T5: core::sync::atomic::AtomicUsize = core::sync::atomic::AtomicUsize::new(0);
-                    if T5.fetch_add(1, Ordering::Relaxed) < 40 {
-                        let hex = payload(0x30).chunks(4).map(|c| format!("{:x}", u32::from_le_bytes(c.try_into().unwrap()))).collect::<Vec<_>>().join(" ");
-                        record("d3d12_xs", "PSOFMT", &format!("derived tag5 payload[{hex}]"));
+            }
+            if crate::pso_ext::apply_derived_patch(tag, payload(crate::pso_ext::DERIVED_PATCH_STRIDE - 4), &mut desc, &mut ds_ext) {
+                continue;
+            }
+            match tag {
+                4 => {
+                    crate::pso_ext::note_derived(tag, payload(0x3c));
+                    match ps_origin.as_mut() {
+                        Some(o) => o.options = crate::pso_ext::ps::merge(&o.options, &crate::pso_ext::ps::options_of(payload(0x20))),
+                        None => record("d3d12_xs", "CreateDerivedPSO_X", "tag 4 pixel-shader options on a base PSO without a recorded pixel shader; options not applied"),
                     }
+                }
+                6 | 7 => {
+                    crate::pso_ext::note_derived(tag, payload(0x3c));
                 }
                 other => {
                     if FAIL.fetch_add(1, Ordering::Relaxed) < 6 {
-                        record("d3d12_xs", "CreateDerivedPSO_X", &format!("unknown patch tag {other} -> E_FAIL"));
+                        record("d3d12_xs", "CreateDerivedPSO_X", &format!("patch tag {other}: the console (xgs12_10 0x5b180) stores payload dword v as v<<16|v&0xffff at PSO state +0x98, a register not yet decoded with no PC mapping -> E_FAIL"));
                     }
                     return E_FAIL;
                 }
@@ -1076,15 +1146,28 @@ unsafe extern "system" fn create_derived_pso_x(
                 tags.trim(), u32at(0x240), u32at(0x244), u32at(0x264), u32at(0x1f0), u32at(0x1f4), u32at(0x1f8), u32at(0x1fc)));
         }
     }
+    if let Some(o) = ps_origin.as_ref().filter(|o| o.options.iter().any(|&v| v != 0)) {
+        let code = crate::pso_ext::ps::variant(o, crate::pso_ext::ps::depth_stencil_writes(&desc)).or_else(|| unsafe { crate::shader_xlat::translate_for_targets(o.blob.as_ptr(), o.blob.len(), o.rtfmt) }.ok());
+        if let Some(code) = code {
+            desc[0x18..0x20].copy_from_slice(&(code.as_ptr() as u64).to_le_bytes());
+            desc[0x20..0x28].copy_from_slice(&(code.len() as u64).to_le_bytes());
+            shaders.push(code);
+        }
+    }
     let f: unsafe extern "system" fn(*mut c_void, *const u8, *const Guid, *mut *mut c_void) -> i32 =
         unsafe { core::mem::transmute(*real_vtbl(real).add(10)) };
-    let hr = unsafe { f(real, desc.as_ptr(), riid, ppv) };
+    let ext_ptr = ds_ext.as_ref().map_or(core::ptr::null(), |e| e.as_ptr());
+    let hr = unsafe { crate::pso_ext::create(real, &desc, ds_ext.is_some() as u32, ext_ptr, riid, ppv).unwrap_or_else(|| f(real, desc.as_ptr(), riid, ppv)) };
+    if hr >= 0 && !ppv.is_null() {
+        unsafe { crate::pso_ext::note(*ppv, ds_ext.is_some() as u32, ext_ptr) };
+        crate::pso_ext::ps::note_pso(unsafe { *ppv }, ps_origin.clone());
+    }
     if hr == 0 && !ppv.is_null() {
         let n = OK.fetch_add(1, Ordering::Relaxed) + 1;
         if n <= 4 || n % 100 == 0 {
             record("d3d12_xs", "CreateDerivedPSO_X", &format!("derived PSO #{n} created (patch tags: {tags})"));
         }
-        unsafe { register_pso(*ppv, desc, rec._shaders.clone()) };
+        unsafe { register_pso(*ppv, desc, shaders) };
     } else if FAIL.fetch_add(1, Ordering::Relaxed) < 10 {
         record("d3d12_xs", "CreateDerivedPSO_X", &format!("real CreateGraphicsPipelineState FAILED hr={hr:#010x} (tags: {tags})"));
     }
@@ -1199,6 +1282,7 @@ unsafe extern "system" fn create_compute_pso_x(
         return E_FAIL;
     }
     let mut desc = unsafe { core::slice::from_raw_parts(pdesc, 0x38).to_vec() };
+    unsafe { crate::pso_ext::note_compute(_num_ext, _pext) };
     if u64::from_le_bytes(desc[0..8].try_into().unwrap()) == 0 {
         let root = unsafe { root_from_shaders(real, &desc, &[8]) };
         desc[0..8].copy_from_slice(&(root as u64).to_le_bytes());
@@ -1248,26 +1332,22 @@ unsafe extern "system" fn create_heap(
     if pdesc.is_null() {
         return unsafe { f(real, pdesc, riid, ppv) };
     }
-    let mut d = unsafe { core::slice::from_raw_parts(pdesc, 0x30).to_vec() };
+    let x = unsafe { core::slice::from_raw_parts(pdesc, crate::device_console_fix::HEAP_DESC_SIZE) };
     let u32at = |d: &[u8], o: usize| u32::from_le_bytes(d[o..o + 4].try_into().unwrap());
     let u64at = |d: &[u8], o: usize| u64::from_le_bytes(d[o..o + 8].try_into().unwrap());
-    let (size, htype, align, flags) = (u64at(&d, 0), u32at(&d, 8), u64at(&d, 0x20), u32at(&d, 0x28));
-    let mut hr = unsafe { f(real, d.as_ptr(), riid, ppv) };
-    let mut note = String::new();
-    if hr < 0 {
-        // Retry with PC-valid values: flags limited to the documented PC bits, and a
-        // PC-legal alignment (0 = default 64 KiB).
-        // PC-defined D3D12_HEAP_FLAGS bits: 0x1 0x4 0x8 0x20 0x40 0x80 0x100 0x200 0x400 0x800 0x1000.
-        // (The title passes 0x2, which is not a PC flag.)
-        let pc_flags = flags & 0x1fed;
-        d[0x28..0x2c].copy_from_slice(&pc_flags.to_le_bytes());
-        if align != 0 && align != 0x10000 && align != 0x400000 {
-            d[0x20..0x28].copy_from_slice(&0u64.to_le_bytes());
+    let (size, htype, align, flags) = (u64at(x, 0), u32at(x, 8), u64at(x, 0x20), u32at(x, 0x28));
+    let d = match crate::device_console_fix::heap_desc_for_pc(x) {
+        Ok(d) => d,
+        Err(e) => {
+            if !ppv.is_null() {
+                unsafe { *ppv = core::ptr::null_mut() };
+            }
+            record("d3d12_xs", "CreateHeap", &format!("size={size:#x} type={htype} flags={flags:#x}: ALLOW_DISPLAY is rejected by the console driver -> hr={e:#010x}"));
+            return e;
         }
-        let hr2 = unsafe { f(real, d.as_ptr(), riid, ppv) };
-        note = format!(" | retry flags={pc_flags:#x} -> hr={hr2:#010x}");
-        hr = hr2;
-    }
+    };
+    let hr = unsafe { f(real, d.as_ptr(), riid, ppv) };
+    let note = format!(" | pc size={:#x} align={:#x} flags={:#x}", u64at(&d, 0), u64at(&d, 0x20), u32at(&d, 0x28));
     if hr >= 0 && crate::rtcap::enabled() && !ppv.is_null() {
         crate::bindtrace::note_heap_type(unsafe { *ppv } as usize, htype);
     }
@@ -1291,6 +1371,10 @@ fn desc_str(d: &[u8]) -> String {
 
 /// ID3D12Device::CreatePlacedResource (slot 29): (pHeap, HeapOffset, pDesc, InitialState,
 /// pClearValue, riid, ppv). Same Xbox→PC desc fixups as committed resources.
+pub(crate) fn resource_riid(riid: *const Guid) -> bool {
+    !riid.is_null() && unsafe { &*riid } == &IID_ID3D12RESOURCE
+}
+
 unsafe extern "system" fn create_placed_resource(
     this: *mut DeviceWrapper, heap: *mut c_void, offset: u64, pdesc: *const u8,
     init_state: u32, pclear: *const c_void, riid: *const Guid, ppv: *mut *mut c_void,
@@ -1298,13 +1382,34 @@ unsafe extern "system" fn create_placed_resource(
     let real = unsafe { (*this).real };
     let f: unsafe extern "system" fn(*mut c_void, *mut c_void, u64, *const u8, u32, *const c_void, *const Guid, *mut *mut c_void) -> i32 =
         unsafe { core::mem::transmute(*real_vtbl(real).add(29)) };
+    if !resource_riid(riid) {
+        record("d3d12_xs", "CreatePlacedResource", "riid is not IID_ID3D12Resource -> E_NOINTERFACE, nothing created (xgs12 0x4765f / xgs12_10 0x4d6be)");
+        return E_NOINTERFACE;
+    }
+    if heap.is_null() {
+        return unsafe { create_placed_resource_x(this, offset, pdesc, init_state, pclear, riid, ppv) };
+    }
     if pdesc.is_null() {
         return unsafe { f(real, heap, offset, pdesc, init_state, pclear, riid, ppv) };
     }
     let mut d = unsafe { core::slice::from_raw_parts(pdesc, 0x38).to_vec() };
     let flags = u32::from_le_bytes(d[0x30..0x34].try_into().unwrap());
     d[0x30..0x34].copy_from_slice(&(flags & 0xFF).to_le_bytes());
-    let hr = unsafe { f(real, heap, offset, d.as_ptr(), init_state, pclear, &IID_ID3D12RESOURCE, ppv) };
+    let init_state = crate::xone_barrier::initial_state(u32::from_le_bytes(d[0..4].try_into().unwrap()), init_state);
+    let da: [u8; 0x38] = d[..0x38].try_into().unwrap();
+    let mut hr = match (d[0], ppv.is_null()) {
+        (1, false) => unsafe { crate::placed_offset::place_in_heap(real, heap, offset, &da, init_state, pclear, ppv) },
+        _ => None,
+    }
+    .unwrap_or_else(|| unsafe { f(real, heap, offset, d.as_ptr(), init_state, pclear, &IID_ID3D12RESOURCE, ppv) });
+    if hr < 0 && d[0] >= 2 && offset % 0x1000 == 0 && offset % 0x1_0000 != 0 && u64::from_le_bytes(d[8..16].try_into().unwrap()) == 0 {
+        let mut small = d.clone();
+        small[8..16].copy_from_slice(&0x1000u64.to_le_bytes());
+        hr = unsafe { f(real, heap, offset, small.as_ptr(), init_state, pclear, &IID_ID3D12RESOURCE, ppv) };
+        if hr >= 0 {
+            d = small;
+        }
+    }
     if hr >= 0 && !ppv.is_null() {
         crate::map_x::ensure_patched(unsafe { *ppv });
         unsafe { crate::gpu_va::note_resource(real, *ppv, &d, init_state, None) };
@@ -1328,9 +1433,13 @@ unsafe extern "system" fn create_placed_resource(
 /// Xbox slot 44 `CreatePlacedResourceX` (see placed.rs for evidence and model).
 unsafe extern "system" fn create_placed_resource_x(
     this: *mut DeviceWrapper, va: u64, pdesc: *const u8, init_state: u32,
-    pclear: *const c_void, _riid: *const Guid, ppv: *mut *mut c_void,
+    pclear: *const c_void, riid: *const Guid, ppv: *mut *mut c_void,
 ) -> i32 {
     let real = unsafe { (*this).real };
+    if !resource_riid(riid) {
+        record("d3d12_xs", "CreatePlacedResourceX", "riid is not IID_ID3D12Resource -> E_NOINTERFACE, nothing created (xgs12 0x477cb / xgs12_10 0x4d85e)");
+        return E_NOINTERFACE;
+    }
     if pdesc.is_null() || ppv.is_null() {
         record("d3d12_xs", "CreatePlacedResourceX", "null desc/out -> E_INVALIDARG");
         return 0x80070057u32 as i32;
@@ -1338,6 +1447,7 @@ unsafe extern "system" fn create_placed_resource_x(
     let orig: [u8; 0x38] = unsafe { core::slice::from_raw_parts(pdesc, 0x38) }.try_into().unwrap();
     let mut d = orig;
     let dim = u32::from_le_bytes(d[0..4].try_into().unwrap());
+    let init_state = crate::xone_barrier::initial_state(dim, init_state);
     let flags = u32::from_le_bytes(d[0x30..0x34].try_into().unwrap());
     d[8..16].copy_from_slice(&0u64.to_le_bytes()); // Alignment: let the host choose
     d[0x2c..0x30].copy_from_slice(&(if dim == 1 { 1u32 } else { 0u32 }).to_le_bytes()); // Layout: ROW_MAJOR for buffers, UNKNOWN for textures (Xbox tile modes have no PC meaning)
@@ -1394,35 +1504,20 @@ unsafe extern "system" fn create_placed_resource_x(
 /// (<= 7) and +0x54 (<= 15) whose meaning is unverified (they look like per-axis anisotropy
 /// limits). The border colour is left zero.
 ///
-/// Implemented as the standard anisotropic sampler those fields were copied from; the
-/// unverified extra fields are ignored (so any Xbox-specific anisotropy bias is not modelled).
 unsafe extern "system" fn create_sampler_x(this: *mut DeviceWrapper, xdesc: *const u8, dest: usize) {
     let real = unsafe { (*this).real };
-    if xdesc.is_null() {
-        record("d3d12_xs", "CreateSamplerX", "null desc - ignored");
-        return;
-    }
-    let x = unsafe { core::slice::from_raw_parts(xdesc, 0x6c) };
-    let u = |o: usize| u32::from_le_bytes(x[o..o + 4].try_into().unwrap());
-    let mut d = [0u8; 0x34]; // D3D12_SAMPLER_DESC
-    let mut put = |o: usize, v: u32| d[o..o + 4].copy_from_slice(&v.to_le_bytes());
-    put(0x00, 0x55); // D3D12_FILTER_ANISOTROPIC
-    put(0x04, u(0x18));
-    put(0x08, u(0x1c));
-    put(0x0c, u(0x20));
-    put(0x10, u(0x2c)); // MipLODBias
-    put(0x14, u(0x34).clamp(1, 16)); // MaxAnisotropy
-    put(0x18, u(0x40)); // ComparisonFunc
-    put(0x2c, u(0x24)); // MinLOD
-    put(0x30, u(0x28)); // MaxLOD
+    let dflt = crate::device_console_fix::default_xsamp();
+    let x: &[u8] = if xdesc.is_null() { &dflt } else { unsafe { core::slice::from_raw_parts(xdesc, crate::device_console_fix::XSAMP_SIZE) } };
+    let d = crate::device_console_fix::sampler_desc_from_xbox(x);
     let f: unsafe extern "system" fn(*mut c_void, *const u8, usize) = unsafe { core::mem::transmute(*real_vtbl(real).add(22)) };
     unsafe { f(real, d.as_ptr(), dest) };
+    let extra = crate::device_console_fix::sampler_unmapped_fields(x);
     static N: core::sync::atomic::AtomicUsize = core::sync::atomic::AtomicUsize::new(0);
-    if N.fetch_add(1, Ordering::Relaxed) < 4 {
+    if N.fetch_add(1, Ordering::Relaxed) < 4 || (!extra.is_empty() && N.load(Ordering::Relaxed) < 64) {
+        let u = |o: usize| u32::from_le_bytes(d[o..o + 4].try_into().unwrap());
         record("d3d12_xs", "CreateSamplerX", &format!(
-            "addr={}/{}/{} maxAniso={} cmp={} lod=[{},{}] bias={} extra(+3c={},+54={}) dest={dest:#x}",
-            u(0x18), u(0x1c), u(0x20), u(0x34), u(0x40), f32::from_bits(u(0x24)), f32::from_bits(u(0x28)),
-            f32::from_bits(u(0x2c)), u(0x3c), u(0x54)));
+            "filter={:#x} addr={}/{}/{} maxAniso={} cmp={} dest={dest:#x} xbox-only fields with no D3D12 PC equivalent: {extra:x?}",
+            u(0), u(4), u(8), u(0xc), u(0x14), u(0x18)));
     }
 }
 
@@ -1468,7 +1563,7 @@ dev_stubs!(
     (d86,86),(d87,87),(d88,88),(d89,89),(d90,90),
 );
 
-fn vtable() -> *const usize {
+pub(crate) fn vtable() -> *const usize {
     static VT: OnceLock<usize> = OnceLock::new();
     *VT.get_or_init(|| {
         let mut v: Vec<usize> = vec![
@@ -1526,7 +1621,9 @@ fn vtable() -> *const usize {
             v[20] = create_rtv_traced as usize;
             v[21] = create_dsv_traced as usize;
         }
+        crate::dbcount::install_device(&mut v);
         crate::console_slots_dev2::install(&mut v);
+        crate::perfctr::install_device(&mut v);
         crate::placed_offset::install(&mut v);
         crate::console_slots::install_device(&mut v, &console_defaults);
         crate::cmdlist_validate::hook_device(&mut v);
@@ -1542,5 +1639,23 @@ pub fn wrap_device(real: *mut c_void) -> *mut c_void {
         unsafe { patch_real_device(real) };
     }
     let w = Box::new(DeviceWrapper { vtable: vtable(), real, refs: AtomicU32::new(1) });
-    Box::into_raw(w) as *mut c_void
+    let p = Box::into_raw(w) as *mut c_void;
+    WRAPPED.lock().unwrap_or_else(|e| e.into_inner()).push((real as usize, p as usize));
+    p
+}
+
+static WRAPPED: std::sync::Mutex<Vec<(usize, usize)>> = std::sync::Mutex::new(Vec::new());
+
+pub(crate) fn is_wrapper(p: *mut c_void) -> bool {
+    WRAPPED.lock().unwrap_or_else(|e| e.into_inner()).iter().any(|e| e.1 == p as usize)
+}
+
+pub(crate) fn wrapper_qi(real: *mut c_void, riid: *const Guid, ppv: *mut *mut c_void) -> Option<i32> {
+    let g = WRAPPED.lock().unwrap_or_else(|e| e.into_inner());
+    let w = g.iter().rev().find(|e| e.0 == real as usize)?.1;
+    Some(unsafe { qi(w as *mut DeviceWrapper, riid, ppv) })
+}
+
+fn unregister_wrapper(w: usize) {
+    WRAPPED.lock().unwrap_or_else(|e| e.into_inner()).retain(|e| e.1 != w);
 }

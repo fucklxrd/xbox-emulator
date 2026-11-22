@@ -152,7 +152,7 @@ unsafe fn rebuild(dev: *mut c_void, pso: usize, want: &Want, keep: &mut Vec<std:
             for (i, x) in f.iter_mut().enumerate() {
                 *x = u32::from_le_bytes(desc[0x244 + i * 4..0x248 + i * 4].try_into().unwrap());
             }
-            crate::shader_xlat::export_formats(u32::from_le_bytes(desc[0x240..0x244].try_into().unwrap()), &f)
+            crate::centroid_bind::tag_rtfmt(u64::from_le_bytes(desc[0..8].try_into().unwrap()), crate::shader_xlat::export_formats(u32::from_le_bytes(desc[0x240..0x244].try_into().unwrap()), &f))
         } else {
             [0u8; 8]
         };

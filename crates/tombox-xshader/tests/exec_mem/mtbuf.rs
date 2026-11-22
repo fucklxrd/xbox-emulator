@@ -280,10 +280,197 @@ fn mtbuf_store_formats() {
 
 #[test]
 fn mtbuf_refuses_unlowered() {
-    for (op, f) in [(4u32, 3u32), (4, 30), (8, 75), (12, 75), (4, 44), (0, 0), (0, 78)] {
+    for (op, f) in [(4u32, 3u32), (4, 30), (8, 75), (12, 9), (4, 44), (0, 0), (0, 78)] {
         let mut w = prog(&[vop1(1, 1, ic(0)), vop1(1, 10, ic(0))]);
         w.extend_from_slice(&mtbuf(op, f, 0, true, 1, 10, 0x80));
         w.push(S_ENDPGM);
         assert!(translate(&cs_extract(&w, 1)).is_err(), "op {op} fmt {f} should be refused");
     }
+}
+
+fn f2h_exact(x: u32) -> u32 {
+    let s = (x >> 16) & 0x8000;
+    let e = ((x >> 23) & 0xff) as i32;
+    let m = x & 0x7f_ffff;
+    if e == 0xff {
+        return s | 0x7c00 | (m >> 13);
+    }
+    if e == 0 && m == 0 {
+        return s;
+    }
+    assert!(e != 0, "f32 denormal {x:#x}");
+    let he = e - 127 + 15;
+    assert!(he < 31, "{x:#x} overflows f16");
+    if he >= 1 {
+        assert!(m & 0x1fff == 0, "{x:#x} inexact in f16");
+        return s | ((he as u32) << 10) | (m >> 13);
+    }
+    let sh = (14 - he) as u32;
+    let full = m | 0x80_0000;
+    assert!(full & ((1 << sh) - 1) == 0, "{x:#x} inexact in f16");
+    s | (full >> sh)
+}
+
+fn d16_comp(c: u32, bits: u32, num: N) -> Option<Option<u32>> {
+    Some(match num {
+        N::F if bits < 32 => {
+            let r = conv(c, bits, N::F);
+            (!f32::from_bits(r).is_nan()).then(|| f2h_exact(r))
+        }
+        N::Ui if bits <= 16 => Some(c),
+        N::Si if bits <= 16 => Some(sx(c, bits) as u32 & 0xffff),
+        N::Us | N::Ss if bits <= 11 => Some(f2h_exact(conv(c, bits, num))),
+        _ => return None,
+    })
+}
+
+fn load_ref_d16(init: &[u32], at: usize, f: u32, n: u32) -> Option<Vec<Option<u32>>> {
+    let (fields, len, num) = fmt_ref(f);
+    let x = elem(&bytes_of(init), at, len);
+    let mut h = Vec::new();
+    for k in 0..n as usize {
+        h.push(if k < fields.len() {
+            let (o, b) = fields[k];
+            d16_comp(((x >> o) as u64 & mk(b)) as u32, b, num)?
+        } else if k == 3 {
+            Some(if matches!(num, N::Ui | N::Si) { 1 } else { 0x3c00 })
+        } else {
+            Some(0)
+        });
+    }
+    Some((0..n as usize).step_by(2).map(|k| if k + 1 < n as usize { Some(h[k]? | (h[k + 1]? << 16)) } else { h[k] }).collect())
+}
+
+const D16_LOADS: [&str; 4] = ["tbuffer_load_format_d16_x", "tbuffer_load_format_d16_xy", "tbuffer_load_format_d16_xyz", "tbuffer_load_format_d16_xyzw"];
+
+fn load_words_d16(f: u32, n: u32, at: u32, mode: u32) -> ([u32; 2], Vec<u32>) {
+    let (vofs, imm, soff) = match mode {
+        0 => (at, 0, 0x80),
+        1 => (0, at, 0x80),
+        _ => (1, 1, 0),
+    };
+    let op = mtbuf(8 + n - 1, f, imm, true, 1, 10, soff);
+    let mut w = prog(&[vop1(1, 1, LIT), vofs, vop1(1, 10, LIT), 0x1357_9bdf, vop1(1, 11, LIT), 0x2468_ace0]);
+    if soff == 0 {
+        w.extend_from_slice(&[sop1_mov(0), at - 2]);
+    }
+    w.extend_from_slice(&op);
+    let nv = n.div_ceil(2);
+    if n % 2 == 1 {
+        w.extend_from_slice(&[vop2(0x1b, 10 + nv - 1, LIT, 10 + nv - 1), 0xffff]);
+    }
+    for j in 0..nv {
+        w.extend_from_slice(&store_out(10 + j, j));
+    }
+    w.push(S_ENDPGM);
+    (op, w)
+}
+
+#[test]
+fn mtbuf_d16_load_formats() {
+    let mut cs = Vec::new();
+    let mut refused = 0;
+    for f in 1..=77u32 {
+        let (fields, len, _) = fmt_ref(f);
+        let aligned = len.min(4);
+        let nf = fields.len() as u32;
+        let mut plan: Vec<(u32, u32, u32)> = (1..=4u32).map(|n| (n, 8, 0)).collect();
+        plan.extend([(nf, 16 + aligned, 1), (4, 3 * aligned + 4, 2), (4, 5, 0)]);
+        for (n, at, mode) in plan {
+            let (op, words) = load_words_d16(f, n, at, mode);
+            let init = data();
+            match load_ref_d16(&init, at as usize, f, n) {
+                Some(want) => {
+                    let mem = want.iter().enumerate().filter_map(|(j, v)| v.map(|v| ((OUT / 4) as usize + j, v))).collect();
+                    cs.push(CsCase { m: D16_LOADS[n as usize - 1], op: op.to_vec(), words, threads: 1, mem, init });
+                }
+                None => {
+                    let e = translate(&cs_extract(&words, 1)).err().unwrap_or_default();
+                    assert!(e.contains("d16"), "fmt {f} n {n}: d16 load should be refused, got {e:?}");
+                    refused += 1;
+                }
+            }
+        }
+    }
+    assert!(cs.len() > 150 && refused > 150, "{} cases, {refused} refused", cs.len());
+    run_cs_cases("mtbuf_d16_load", &cs);
+}
+
+fn vals16(num: N, k: u32) -> u32 {
+    match num {
+        N::Un => [0x3400, 0x38cd, 0x3e00, 0xb4cd][k as usize],
+        N::Sn => [0xb8cd, 0x359a, 0xc000, 0x7e00][k as usize],
+        N::Ui => [3, 0xffff, 0x100, 0x8000][k as usize],
+        N::Si => [0xffff, 0x7fff, 0x8000, 0x0080][k as usize],
+        _ => [0x3e00, 0xc080, 0x7bff, 0x0001][k as usize],
+    }
+}
+
+fn pack_ref_d16(h: u32, bits: u32, n: N) -> Option<u64> {
+    match n {
+        N::F if bits == 16 => Some(h as u64),
+        N::F if bits == 32 => Some(h2f(h).to_bits() as u64),
+        N::Un | N::Sn => pack_ref(h2f(h).to_bits(), bits, n),
+        N::Ui => pack_ref(h, bits, n),
+        N::Si => pack_ref(sx(h, 16) as u32, bits, n),
+        _ => None,
+    }
+}
+
+const D16_STORES: [&str; 4] = ["tbuffer_store_format_d16_x", "tbuffer_store_format_d16_xy", "tbuffer_store_format_d16_xyz", "tbuffer_store_format_d16_xyzw"];
+
+fn store_case_d16(f: u32, n: u32, at: u32, offen: bool) -> Result<CsCase, Vec<u32>> {
+    let (fields, len, num) = fmt_ref(f);
+    let nf = fields.len() as u32;
+    let h: Vec<u32> = (0..n).map(|k| vals16(num, k)).collect();
+    let op = mtbuf(12 + n - 1, f, if offen { 0 } else { at }, offen, 1, 10, 0x80);
+    let mut w = prog(&[vop1(1, 1, LIT), at]);
+    for j in 0..n.div_ceil(2) {
+        let hi = h.get(2 * j as usize + 1).copied().unwrap_or(0xdead);
+        w.extend_from_slice(&[vop1(1, 10 + j, LIT), h[2 * j as usize] | (hi << 16)]);
+    }
+    w.extend_from_slice(&op);
+    w.push(S_ENDPGM);
+    let w_n = n.min(nf);
+    let mut packed = 0u128;
+    for k in 0..w_n {
+        let (o, b) = fields[k as usize];
+        match pack_ref_d16(h[k as usize], b, num) {
+            Some(p) => packed |= (p as u128) << o,
+            None => return Err(w),
+        }
+    }
+    let end = fields[w_n as usize - 1].0 + fields[w_n as usize - 1].1;
+    if w_n < nf && (end % 8 != 0 || fields.iter().any(|&(o, b)| o % 8 != 0 || b % 8 != 0)) {
+        return Err(w);
+    }
+    let wl = if w_n < nf { end / 8 } else { len };
+    let mut bytes = bytes_of(&data());
+    for i in 0..wl as usize {
+        bytes[at as usize + i] = (packed >> (8 * i)) as u8;
+    }
+    let mem = (0..16usize).map(|i| (i, u32::from_le_bytes(bytes[4 * i..4 * i + 4].try_into().unwrap()))).collect();
+    Ok(CsCase { m: D16_STORES[n as usize - 1], op: op.to_vec(), words: w, threads: 1, mem, init: data() })
+}
+
+#[test]
+fn mtbuf_d16_store_formats() {
+    let mut cs = Vec::new();
+    let mut refused = 0;
+    for f in 1..=77u32 {
+        let (_, len, _) = fmt_ref(f);
+        for n in 1..=4u32 {
+            for (at, offen) in [(8u32, false), (8 + len.min(4), true), (13, true)] {
+                match store_case_d16(f, n, at, offen) {
+                    Ok(c) => cs.push(c),
+                    Err(w) => {
+                        assert!(translate(&cs_extract(&w, 1)).is_err(), "fmt {f} n {n}: d16 store should be refused");
+                        refused += 1;
+                    }
+                }
+            }
+        }
+    }
+    assert!(cs.len() > 300 && refused > 0, "{} cases, {refused} refused", cs.len());
+    run_cs_cases("mtbuf_d16_store", &cs);
 }

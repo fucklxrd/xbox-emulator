@@ -54,6 +54,7 @@ macro_rules! vcall {
 pub enum Kind {
     Title,
     Local,
+    Shadow,
 }
 
 #[derive(Debug)]
@@ -161,11 +162,13 @@ fn env_on(name: &str) -> bool {
     std::env::var(name).map(|v| v != "0").unwrap_or(true)
 }
 
-static FORCE_TITLE: core::sync::atomic::AtomicBool = core::sync::atomic::AtomicBool::new(false);
+thread_local! {
+    static FORCE_TITLE: core::cell::Cell<bool> = const { core::cell::Cell::new(false) };
+}
 
 fn title_buffers_enabled() -> bool {
     static V: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
-    FORCE_TITLE.load(Ordering::Relaxed) || *V.get_or_init(|| std::env::var("TOMBOX_ALIAS_TITLE").map(|v| v == "1").unwrap_or(false))
+    FORCE_TITLE.with(|f| f.get()) || *V.get_or_init(|| std::env::var("TOMBOX_ALIAS_TITLE").map(|v| v == "1").unwrap_or(false))
 }
 
 fn local_enabled() -> bool {
@@ -214,6 +217,7 @@ unsafe extern "system" fn watch_release(this: *mut c_void) -> u32 {
     if n == 0 {
         let res = unsafe { (*w).res };
         crate::placed_offset::forget(res);
+        crate::title_shadow::resource_gone(res);
         GONE.lock().unwrap_or_else(|e| e.into_inner()).push(res);
         if let Some(s) = ALIASED.lock().unwrap_or_else(|e| e.into_inner()).as_mut() {
             s.remove(&res);
@@ -411,7 +415,15 @@ fn housekeeping(sp: &mut Spans) {
     }
     for h in sp.take_idle() {
         crate::msaa_place::forget_heap(h);
+        crate::title_shadow::forget_heap(h);
         unsafe { vcall!(h as *mut c_void, 2, fn() -> u32) };
+    }
+}
+
+#[cfg(test)]
+pub(crate) fn flush_spans() {
+    if let Some(sp) = SPANS.lock().unwrap_or_else(|e| e.into_inner()).as_mut() {
+        housekeeping(sp);
     }
 }
 
@@ -425,6 +437,23 @@ pub fn tick() {
             housekeeping(sp);
         }
     }
+}
+
+unsafe fn migrate_shadow(real: *mut c_void, sp: &mut Spans, va: u64, size: u64) -> bool {
+    let Some(k) = sp.find(Kind::Shadow, va, size, 1) else { return false };
+    let (lo, hi, shadow) = { let s = sp.get(k); (s.lo, s.hi, s.heap) };
+    let Some(h) = (unsafe { create_local_heap(real, hi - lo, false) }) else { return false };
+    if !unsafe { crate::title_shadow::migrate(real, shadow, h as usize) } {
+        crate::msaa_place::forget_heap(h as usize);
+        unsafe { vcall!(h, 2, fn() -> u32) };
+        return false;
+    }
+    STATS.heaps.fetch_add(1, Ordering::Relaxed);
+    let s = sp.get_mut(k);
+    s.kind = Kind::Local;
+    s.heap = h as usize;
+    unsafe { vcall!(shadow as *mut c_void, 2, fn() -> u32) };
+    true
 }
 
 pub struct Made {
@@ -465,6 +494,25 @@ pub unsafe fn create_placed_x(real: *mut c_void, va: u64, pc_desc: &[u8; 0x38], 
             desc = *pc_desc;
         }
     }
+    if chosen.is_none() && dim == 1 && va % PLACEMENT_ALIGN == 0 && crate::title_shadow::enabled() {
+        let width = u64::from_le_bytes(desc[0x10..0x18].try_into().unwrap());
+        let local_covers = local_enabled() && sp.find(Kind::Local, va, width, PLACEMENT_ALIGN).is_some();
+        if let Some(r) = reservation(va).filter(|_| !local_covers) {
+            let key = match sp.find(Kind::Shadow, va, width, PLACEMENT_ALIGN) {
+                Some(k) => Some((k, false)),
+                None => {
+                    let (lo, hi) = local_span(va, width, Some(r));
+                    unsafe { crate::title_shadow::create_heap(real, lo, hi) }.map(|h| {
+                        STATS.heaps.fetch_add(1, Ordering::Relaxed);
+                        (sp.insert(Span { lo, hi, kind: Kind::Shadow, heap: h, retired: false, live: HashSet::new() }), true)
+                    })
+                }
+            };
+            if let Some((k, fresh)) = key {
+                chosen = Some((k, va - k.0, fresh));
+            }
+        }
+    }
     if chosen.is_none() && local_enabled() && (samples <= 1 || dim >= 2) && (dim >= 2 || va % PLACEMENT_ALIGN == 0) {
         let flags = u32::from_le_bytes(desc[0x30..0x34].try_into().unwrap());
         let mut info = (0u64, 0u64);
@@ -482,6 +530,9 @@ pub unsafe fn create_placed_x(real: *mut c_void, va: u64, pc_desc: &[u8; 0x38], 
         }
         let (size, align) = info;
         if size != 0 && size != u64::MAX && align != 0 && align <= crate::msaa_place::max_align(samples) && va % align.min(PLACEMENT_ALIGN) == 0 {
+            if samples <= 1 {
+                unsafe { migrate_shadow(real, sp, va, size) };
+            }
             let key = match sp.find(Kind::Local, va, size, align) {
                 Some(k) if samples > 1 && !crate::msaa_place::capable(sp.get(k).heap) => None,
                 Some(k) => Some((k, false)),
@@ -504,9 +555,13 @@ pub unsafe fn create_placed_x(real: *mut c_void, va: u64, pc_desc: &[u8; 0x38], 
         return None;
     };
     let (heap, kind) = { let s = sp.get(key); (s.heap, s.kind) };
-    let hr = unsafe {
-        vcall!(real, 29, fn(*mut c_void, u64, *const u8, u32, *const c_void, *const Guid, *mut *mut c_void) -> i32,
-            heap as *mut c_void, offset, desc.as_ptr(), init_state, pclear, &IID_RESOURCE, ppv)
+    let hr = if kind == Kind::Shadow {
+        unsafe { crate::title_shadow::place_reserved(real, heap, offset, &desc, init_state, ppv) }
+    } else {
+        unsafe {
+            vcall!(real, 29, fn(*mut c_void, u64, *const u8, u32, *const c_void, *const Guid, *mut *mut c_void) -> i32,
+                heap as *mut c_void, offset, desc.as_ptr(), init_state, pclear, &IID_RESOURCE, ppv)
+        }
     };
     if hr < 0 || unsafe { *ppv }.is_null() {
         static N: AtomicUsize = AtomicUsize::new(0);
@@ -528,8 +583,11 @@ pub unsafe fn create_placed_x(real: *mut c_void, va: u64, pc_desc: &[u8; 0x38], 
     }
     sp.get_mut(key).live.insert(res as usize);
     ALIASED.lock().unwrap_or_else(|e| e.into_inner()).get_or_insert_with(HashSet::new).insert(res as usize);
+    if kind == Kind::Shadow {
+        crate::title_shadow::add_resource(heap, res as usize, va, u64::from_le_bytes(desc[0x10..0x18].try_into().unwrap()));
+    }
     match kind {
-        Kind::Title => STATS.title.fetch_add(1, Ordering::Relaxed),
+        Kind::Title | Kind::Shadow => STATS.title.fetch_add(1, Ordering::Relaxed),
         Kind::Local => STATS.local.fetch_add(1, Ordering::Relaxed),
     };
     if !fresh {
@@ -575,6 +633,10 @@ mod tests {
 
     extern "system" {
         fn VirtualAlloc(addr: *mut c_void, size: usize, ty: u32, protect: u32) -> *mut c_void;
+    }
+
+    pub(crate) fn flush() {
+        super::flush_spans();
     }
 
     fn span(lo: u64, hi: u64, kind: Kind, heap: usize) -> Span {
@@ -701,7 +763,7 @@ mod tests {
     #[test]
     fn two_placements_at_one_va_share_title_memory() {
         unsafe {
-            FORCE_TITLE.store(true, Ordering::Relaxed);
+            FORCE_TITLE.with(|f| f.set(true));
             let mut g = Gpu::new();
             let base = VirtualAlloc(core::ptr::null_mut(), 1 << 20, 0x3000, 4) as u64;
             let va = base + 0x2_0000;
@@ -759,7 +821,7 @@ mod tests {
     #[test]
     fn title_heap_does_not_block_unmap_or_free() {
         unsafe {
-            FORCE_TITLE.store(true, Ordering::Relaxed);
+            FORCE_TITLE.with(|f| f.set(true));
             let mut g = Gpu::new();
             let fm = CreateFileMappingW(-1, core::ptr::null(), 0x04 | 0x800_0000, 0, 0x4_0000, core::ptr::null());
             assert!(!fm.is_null());
@@ -786,7 +848,7 @@ mod tests {
             assert_eq!(mb.kind, Kind::Title);
             assert_eq!(VirtualFree(p, 0, 0x8000), 0, "the PC runtime pins private memory under an open heap");
             vcall!(b, 2, fn() -> u32);
-            tick();
+            flush();
             assert_eq!(VirtualFree(p, 0, 0x8000), 1, "once the last placed resource is released its title heap must be gone");
         }
     }

@@ -56,6 +56,7 @@ fn w(s: &str) -> Vec<u16> {
 }
 
 #[test]
+#[cfg_attr(not(tombox_backend_data), ignore = "needs crates/compat/compat-common/backend_data")]
 fn async_rta_websocket_handle_gets_every_callback_and_acks_subscribe() {
     std::env::set_var("TOMBOX_NET_BACKEND", "builtin");
     std::env::set_var("TOMBOX_NET_TITLE", "fortnite");

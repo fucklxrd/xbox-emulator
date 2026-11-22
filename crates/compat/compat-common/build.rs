@@ -60,7 +60,6 @@ fn main() {
     let here = PathBuf::from(std::env::var("CARGO_MANIFEST_DIR").unwrap());
     let backend_data = here.join("backend_data");
     println!("cargo:rustc-check-cfg=cfg(tombox_backend_data)");
-    // Watch the crate directory until the locally staged backend data is added.
     let watch = if backend_data.is_dir() {
         println!("cargo:rustc-cfg=tombox_backend_data");
         &backend_data
@@ -68,9 +67,16 @@ fn main() {
         &here
     };
     println!("cargo:rerun-if-changed={}", watch.display());
+    let analysis_gdk = here.join("../../../analysis/gdk");
+    println!("cargo:rustc-check-cfg=cfg(tombox_analysis_gdk)");
+    println!("cargo:rerun-if-changed={}", analysis_gdk.display());
+    if analysis_gdk.is_dir() {
+        println!("cargo:rustc-cfg=tombox_analysis_gdk");
+    }
     let compat = here.parent().unwrap().to_path_buf();
     let hosts = here.join("data").join("console_apiset_hosts.txt");
     println!("cargo:rerun-if-changed={}", hosts.display());
+    println!("cargo:rerun-if-changed={}", here.join("../../../Cargo.toml").display());
     let mut libs: Vec<(PathBuf, String, bool)> = Vec::new();
     let mut dirs: Vec<PathBuf> = std::fs::read_dir(&compat).map(|r| r.filter_map(|e| e.ok().map(|e| e.path())).filter(|p| p.is_dir()).collect()).unwrap_or_default();
     dirs.sort();

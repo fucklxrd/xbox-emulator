@@ -365,5 +365,9 @@ pub extern "system" fn DllCanUnloadNow() -> i32 {
     (OBJECTS.load(Ordering::SeqCst) != 0) as i32
 }
 
+pub mod merge;
+
 #[cfg(test)]
 mod tests;
+#[cfg(test)]
+mod tests_merge;

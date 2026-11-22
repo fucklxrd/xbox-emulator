@@ -5,6 +5,9 @@
 use std::ffi::c_void;
 use std::collections::BTreeMap;
 
+#[path = "mdbg_heap.rs"]
+mod heap;
+
 type HANDLE = isize;
 
 #[repr(C)]
@@ -231,6 +234,7 @@ fn main() {
                     // The debug string includes its NUL terminator (and usually a newline).
                     let s = s.replace('\0', "");
                     println!("[ODS] {}", s.trim_end_matches(['\n', '\r']));
+                    heap::on_ods(hproc, evt.tid, exe_base, tids.len(), &s, &modules);
                 }
             }
             1 => { // EXCEPTION. Record: code@0, addr@16, NumParams@24, Info[0]@32, Info[1]@40, firstChance@152
@@ -284,8 +288,9 @@ fn main() {
                     status = DBG_CONTINUE;
                 } else if ecode == 0x80000003 && addr == sink_addr && sink_planted {
                     eprintln!("[EXIT] RtlExitUserProcess reached — capturing stack");
-                    capture_exit(hproc, evt.tid, exe_base, exe_size, &modules);
-                    unsafe { TerminateProcess(hproc, 1); }
+                    let code = capture_exit(hproc, evt.tid, exe_base, exe_size, &modules);
+                    capture_exit_extra(hproc, evt.tid, &modules);
+                    unsafe { TerminateProcess(hproc, code.unwrap_or(1)); }
                     status = DBG_CONTINUE;
                 } else if ecode == 0x80000003 || ecode == 0x4000001F {
                     status = DBG_CONTINUE; // loader/init breakpoint
@@ -306,6 +311,7 @@ fn main() {
                         } else { String::from_utf8_lossy(&buf[..got]).into_owned() };
                         let s = s.trim_end_matches(['\0','\n','\r']);
                         println!("[ODS] {s}");
+                        heap::on_ods(hproc, evt.tid, exe_base, tids.len(), s, &modules);
                     }
                     status = DBG_CONTINUE;
                 } else {
@@ -602,16 +608,16 @@ fn dump_thread(hproc: HANDLE, tid: u32, modules: &BTreeMap<u64, String>) {
     unsafe { CloseHandle(hthread); }
 }
 
-fn capture_exit(hproc: HANDLE, tid: u32, exe_base: u64, exe_size: u64, modules: &BTreeMap<u64, String>) {
+fn capture_exit(hproc: HANDLE, tid: u32, exe_base: u64, exe_size: u64, modules: &BTreeMap<u64, String>) -> Option<u32> {
     const THREAD_GET_CONTEXT: u32 = 0x0008;
     const THREAD_QUERY_INFORMATION: u32 = 0x0040;
     let hthread = unsafe { OpenThread(THREAD_GET_CONTEXT | THREAD_QUERY_INFORMATION, 0, tid) };
-    if hthread == 0 { eprintln!("[EXIT] OpenThread failed err={}", unsafe { GetLastError() }); return; }
+    if hthread == 0 { eprintln!("[EXIT] OpenThread failed err={}", unsafe { GetLastError() }); return None; }
     let mut ctx = Ctx([0u8; 1256]);
     ctx.0[0x30..0x34].copy_from_slice(&0x0010_0003u32.to_le_bytes()); // CONTROL|INTEGER
     if unsafe { GetThreadContext(hthread, ctx.0.as_mut_ptr()) } == 0 {
         eprintln!("[EXIT] GetThreadContext failed err={}", unsafe { GetLastError() });
-        unsafe { CloseHandle(hthread); } return;
+        unsafe { CloseHandle(hthread); } return None;
     }
     let rcx = rd_u64(&ctx.0, 0x80);
     let rsp = rd_u64(&ctx.0, 0x98);
@@ -645,6 +651,132 @@ fn capture_exit(hproc: HANDLE, tid: u32, exe_base: u64, exe_size: u64, modules: 
         i += 8;
     }
     unsafe { CloseHandle(hthread); }
+    Some(rcx as u32)
+}
+
+fn read_until_fault(hproc: HANDLE, addr: u64, max: usize) -> Vec<u8> {
+    let mut out = Vec::with_capacity(max);
+    let mut a = addr;
+    while out.len() < max {
+        let page_end = (a | 0xfff) + 1;
+        let n = ((page_end - a) as usize).min(max - out.len());
+        let mut buf = vec![0u8; n];
+        let mut got = 0usize;
+        let ok = unsafe { ReadProcessMemory(hproc, a as *const c_void, buf.as_mut_ptr(), n, &mut got) };
+        if ok == 0 || got == 0 { break; }
+        out.extend_from_slice(&buf[..got]);
+        if got < n { break; }
+        a += n as u64;
+    }
+    out
+}
+
+fn printable(c: u8) -> bool { (0x20..0x7f).contains(&c) || c == b'\t' || c == b'\n' || c == b'\r' }
+
+fn ascii_runs(buf: &[u8], min: usize) -> Vec<(usize, String)> {
+    let mut out = Vec::new();
+    let mut s = 0usize;
+    for i in 0..=buf.len() {
+        let p = i < buf.len() && printable(buf[i]);
+        if !p {
+            if i - s >= min { out.push((s, String::from_utf8_lossy(&buf[s..i]).into_owned())); }
+            s = i + 1;
+        }
+    }
+    out
+}
+
+fn leading_ascii(buf: &[u8], min: usize) -> Option<String> {
+    let n = buf.iter().position(|&c| !printable(c)).unwrap_or(buf.len());
+    if n >= min { Some(String::from_utf8_lossy(&buf[..n]).into_owned()) } else { None }
+}
+
+fn stack_module_firsts(stack: &[u8], modules: &BTreeMap<u64, String>) -> Vec<(usize, String, u64)> {
+    let mut seen = std::collections::BTreeSet::new();
+    let mut out = Vec::new();
+    let mut i = 0;
+    while i + 8 <= stack.len() {
+        let v = rd_u64(stack, i);
+        if let Some((b, n)) = modules.range(..=v).next_back() {
+            if v - b < 0x6000000 && v > 0x10000 && seen.insert(n.to_ascii_lowercase()) {
+                out.push((i, n.clone(), v - b));
+            }
+        }
+        i += 8;
+    }
+    out
+}
+
+fn stack_strings(stack: &[u8], modules: &BTreeMap<u64, String>, mut deref: impl FnMut(u64) -> Vec<u8>) -> Vec<String> {
+    let mut seen = std::collections::BTreeSet::new();
+    let mut out = Vec::new();
+    for (off, s) in ascii_runs(stack, 12) {
+        if seen.insert(s.clone()) { out.push(format!("    [rsp+0x{:x}] \"{}\"", off, s.escape_debug())); }
+    }
+    let mut i = 0;
+    while i + 8 <= stack.len() && out.len() < 120 {
+        let v = rd_u64(stack, i);
+        let in_module = modules.range(..=v).next_back().map_or(false, |(b, _)| v - b < 0x6000000);
+        if v > 0x10000 && v < 0x8000_0000_0000 && !in_module {
+            if let Some(s) = leading_ascii(&deref(v), 12) {
+                if seen.insert(s.clone()) { out.push(format!("    [rsp+0x{:x}] -> 0x{:x} \"{}\"", i, v, s.escape_debug())); }
+            }
+        }
+        i += 8;
+    }
+    out
+}
+
+#[repr(C)]
+#[derive(Default)]
+struct ProcessMemoryCountersEx {
+    cb: u32, page_fault_count: u32, peak_working_set: usize, working_set: usize,
+    quota_peak_paged_pool: usize, quota_paged_pool: usize, quota_peak_non_paged_pool: usize, quota_non_paged_pool: usize,
+    pagefile_usage: usize, peak_pagefile_usage: usize, private_usage: usize,
+}
+
+#[repr(C)]
+#[derive(Default)]
+struct MemoryStatusEx {
+    length: u32, memory_load: u32, total_phys: u64, avail_phys: u64, total_page_file: u64, avail_page_file: u64,
+    total_virtual: u64, avail_virtual: u64, avail_extended_virtual: u64,
+}
+
+#[link(name = "kernel32")]
+extern "system" {
+    fn K32GetProcessMemoryInfo(h: HANDLE, c: *mut ProcessMemoryCountersEx, cb: u32) -> i32;
+    fn GlobalMemoryStatusEx(s: *mut MemoryStatusEx) -> i32;
+}
+
+fn capture_exit_extra(hproc: HANDLE, tid: u32, modules: &BTreeMap<u64, String>) {
+    const MB: f64 = 1048576.0;
+    let mut pmc = ProcessMemoryCountersEx { cb: std::mem::size_of::<ProcessMemoryCountersEx>() as u32, ..Default::default() };
+    if unsafe { K32GetProcessMemoryInfo(hproc, &mut pmc, pmc.cb) } != 0 {
+        eprintln!("[EXIT] process memory: private={:.0} MB peak_commit={:.0} MB working_set={:.0} MB peak_ws={:.0} MB",
+            pmc.private_usage as f64 / MB, pmc.peak_pagefile_usage as f64 / MB, pmc.working_set as f64 / MB, pmc.peak_working_set as f64 / MB);
+    } else {
+        eprintln!("[EXIT] K32GetProcessMemoryInfo failed err={}", unsafe { GetLastError() });
+    }
+    let mut ms = MemoryStatusEx { length: std::mem::size_of::<MemoryStatusEx>() as u32, ..Default::default() };
+    if unsafe { GlobalMemoryStatusEx(&mut ms) } != 0 {
+        eprintln!("[EXIT] system memory: load={}% phys avail={:.0}/{:.0} MB commit avail={:.0}/{:.0} MB",
+            ms.memory_load, ms.avail_phys as f64 / MB, ms.total_phys as f64 / MB, ms.avail_page_file as f64 / MB, ms.total_page_file as f64 / MB);
+    }
+    let hthread = unsafe { OpenThread(0x0008 | 0x0040, 0, tid) };
+    if hthread == 0 { return; }
+    let mut ctx = Ctx([0u8; 1256]);
+    ctx.0[0x30..0x34].copy_from_slice(&0x0010_0003u32.to_le_bytes());
+    let ok = unsafe { GetThreadContext(hthread, ctx.0.as_mut_ptr()) };
+    unsafe { CloseHandle(hthread); }
+    if ok == 0 { return; }
+    let rsp = rd_u64(&ctx.0, 0x98);
+    let stack = read_until_fault(hproc, rsp, 0x10000);
+    eprintln!("[EXIT] exiting tid={} stack bytes read={:#x}; first hit of each module (deepest frames show who started the work):", tid, stack.len());
+    for (off, n, rva) in stack_module_firsts(&stack, modules) {
+        eprintln!("    [rsp+0x{:x}] {} +0x{:x}", off, n, rva);
+    }
+    eprintln!("[EXIT] strings on the exiting stack and behind its pointers:");
+    for l in stack_strings(&stack, modules, |p| read_until_fault(hproc, p, 512)) { eprintln!("{l}"); }
 }
 
 fn rd_u16(u: &[u8], o: usize) -> u16 { u16::from_le_bytes([u[o],u[o+1]]) }
@@ -668,5 +800,58 @@ fn exc_name(c: u32) -> &'static str {
         0x4001000A => "DBG_PRINTEXCEPTION_WIDE_C", 0xC00000FD => "stack_overflow",
         0xC0000417 => "invalid_crt_param", 0xC06D007E => "module_not_found",
         0xC06D007F => "procedure_not_found", _ => "",
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn mods() -> BTreeMap<u64, String> {
+        let mut m = BTreeMap::new();
+        m.insert(0x7ff9_0000_0000, "nvgpucomp64.dll".to_string());
+        m.insert(0x7ff9_1000_0000, "d3d12_xs.dll".to_string());
+        m
+    }
+
+    #[test]
+    fn ascii_runs_keep_long_text_only() {
+        let mut b = vec![0u8; 4];
+        b.extend_from_slice(b"LLVM ERROR: cannot select");
+        b.push(0);
+        b.extend_from_slice(b"short");
+        b.push(0xff);
+        let r = ascii_runs(&b, 12);
+        assert_eq!(r, vec![(4, "LLVM ERROR: cannot select".to_string())]);
+        assert_eq!(leading_ascii(b"GISelFailure: x\0junk", 12).as_deref(), Some("GISelFailure: x"));
+        assert_eq!(leading_ascii(b"tiny\0", 12), None);
+    }
+
+    #[test]
+    fn module_firsts_list_each_module_once_in_stack_order() {
+        let m = mods();
+        let vals = [0x7ff9_0000_1234u64, 0x7ff9_0000_5678, 0x1234, 0x7ff9_1000_0042, 0x7ff9_0000_9999];
+        let stack: Vec<u8> = vals.iter().flat_map(|v| v.to_le_bytes()).collect();
+        let r = stack_module_firsts(&stack, &m);
+        assert_eq!(r, vec![(0, "nvgpucomp64.dll".to_string(), 0x1234), (0x18, "d3d12_xs.dll".to_string(), 0x42)]);
+    }
+
+    #[test]
+    fn stack_strings_follow_heap_pointers_but_not_module_code() {
+        let m = mods();
+        let heap = 0x0000_01c3_6000_0000u64;
+        let code = 0x7ff9_0000_4000u64;
+        let mut stack: Vec<u8> = Vec::new();
+        stack.extend_from_slice(&heap.to_le_bytes());
+        stack.extend_from_slice(&code.to_le_bytes());
+        stack.extend_from_slice(b"inline stack message\0\0\0\0");
+        let mut asked = Vec::new();
+        let r = stack_strings(&stack, &m, |p| {
+            asked.push(p);
+            if p == heap { b"cannot select: %5:_(s32) = G_FOO %3, %4 (in function: main)\0".to_vec() } else { Vec::new() }
+        });
+        assert!(asked.contains(&heap) && !asked.contains(&code));
+        assert!(r.iter().any(|l| l.contains("[rsp+0x10] \"inline stack message\"")));
+        assert!(r.iter().any(|l| l.contains("-> 0x1c360000000 \"cannot select: %5:_(s32) = G_FOO %3, %4 (in function: main)\"")));
     }
 }

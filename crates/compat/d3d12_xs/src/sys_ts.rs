@@ -83,21 +83,39 @@ unsafe fn vslot(obj: *mut c_void, i: usize) -> usize {
     unsafe { *(*(obj as *const *const usize)).add(i) }
 }
 
-#[cfg(test)]
 pub fn convert(t: u64, c: &Calibration) -> u64 {
     let (neg, d) = if t < c.gpu { (true, c.gpu - t) } else { (false, t - c.gpu) };
-    let (num, den) = (c.sys_freq, c.gpu_freq.max(1));
+    let k = gcd(c.sys_freq, c.gpu_freq.max(1));
+    let (num, den) = (c.sys_freq / k, c.gpu_freq.max(1) / k);
     let v = (d / den).wrapping_mul(num).wrapping_add(((d % den) * num) / den);
     if neg { c.sys.wrapping_sub(v) } else { c.sys.wrapping_add(v) }
 }
 
+fn gcd(mut a: u64, mut b: u64) -> u64 {
+    while b != 0 {
+        (a, b) = (b, a % b);
+    }
+    a.max(1)
+}
+
 pub fn constants(c: &Calibration, slot: u32) -> [u32; 9] {
     let s = |v: u64| [v as u32, (v >> 32) as u32];
+    let den = c.gpu_freq.max(1);
+    let k = gcd(c.sys_freq, den);
     let [a, b] = s(c.gpu);
     let [d, e] = s(c.sys);
-    let [f, g] = s(c.sys_freq);
-    let [h, i] = s(c.gpu_freq.max(1));
+    let [f, g] = s(c.sys_freq / k);
+    let [h, i] = s(den / k);
     [a, b, d, e, f, g, h, i, slot]
+}
+
+pub fn system_counter_hz() -> u64 {
+    xgs_kmd_emu::gpu_frequency_hz(xgs_kmd_emu::device_type())
+}
+
+pub fn counter_calibration(gpu_ticks: u64, gpu_freq: u64, qpc: u64, qpf: u64, counter_hz: u64) -> Calibration {
+    let sys = (qpc as u128 * counter_hz as u128 / qpf.max(1) as u128) as u64;
+    Calibration { gpu: gpu_ticks, sys, sys_freq: counter_hz, gpu_freq }
 }
 
 pub fn note_queue(queue: *mut c_void, freq: usize, calib: usize) {
@@ -115,22 +133,22 @@ unsafe fn calibration() -> Option<Calibration> {
         QueryPerformanceFrequency(&mut qpf);
     }
     let mut g = CAL.lock().unwrap_or_else(|e| e.into_inner());
-    if let Some((c, at)) = *g {
-        if now - at < qpf / 2 {
-            return Some(c);
-        }
+    if let Some((c, _)) = *g {
+        return Some(c);
     }
     let (q, freq, calib) = *QUEUE.lock().unwrap_or_else(|e| e.into_inner());
     if q == 0 {
-        return g.map(|x| x.0);
+        return None;
     }
     let f: crate::timestamp::FreqFn = unsafe { core::mem::transmute(freq) };
     let k: crate::timestamp::CalibFn = unsafe { core::mem::transmute(calib) };
     let (mut gf, mut gt, mut ct) = (0u64, 0u64, 0u64);
-    if unsafe { f(q as *mut c_void, &mut gf) } < 0 || unsafe { k(q as *mut c_void, &mut gt, &mut ct) } < 0 || gf == 0 {
-        return g.map(|x| x.0);
+    if unsafe { f(q as *mut c_void, &mut gf) } < 0 || unsafe { k(q as *mut c_void, &mut gt, &mut ct) } < 0 || gf == 0 || qpf <= 0 {
+        return None;
     }
-    let c = Calibration { gpu: gt, sys: ct, sys_freq: qpf as u64, gpu_freq: gf };
+    let hz = system_counter_hz();
+    let c = counter_calibration(gt, gf, ct, qpf as u64, hz);
+    record("d3d12_xs", "sys_ts", &format!("SYSTEM_TIMESTAMP counter: {hz} Hz console GPU core clock (device slot 68 / IOCTL 0x7900c1fc frequency), epoch = QPC zero, fixed calibration gpu={gt} @ {gf} Hz <-> qpc={ct} @ {qpf} Hz"));
     *g = Some((c, now));
     Some(c)
 }
@@ -272,7 +290,60 @@ mod tests {
         let c2 = Calibration { gpu: 0, sys: 0, sys_freq: 10_000_000, gpu_freq: 24_000_000 };
         assert_eq!(convert(24_000_000 * 3600, &c2), 10_000_000 * 3600);
         assert_eq!(convert(u64::MAX / 2, &c2), ((u64::MAX / 2) as u128 * 10_000_000 / 24_000_000) as u64);
-        assert_eq!(constants(&c2, 7), [0, 0, 0, 0, 10_000_000, 0, 24_000_000, 0, 7]);
+        assert_eq!(constants(&c2, 7), [0, 0, 0, 0, 5, 0, 12, 0, 7]);
+    }
+
+    fn shader_math(t: u64, k: &[u32; 9]) -> Option<u64> {
+        let w = |lo: u32, hi: u32| (hi as u64) << 32 | lo as u64;
+        let (g, sys, num, den) = (w(k[0], k[1]), w(k[2], k[3]), w(k[4], k[5]), w(k[6], k[7]));
+        let (neg, d) = if t < g { (true, g - t) } else { (false, t - g) };
+        let v = (d / den).checked_mul(num)?.checked_add(((d % den).checked_mul(num)?) / den)?;
+        Some(if neg { sys.wrapping_sub(v) } else { sys.wrapping_add(v) })
+    }
+
+    #[test]
+    fn system_counter_runs_at_the_console_gpu_clock_from_the_qpc_epoch() {
+        let f = 1_825_000_000u64;
+        let c = counter_calibration(5_000_000_000, 1_000_000_000, 30_000_000, 10_000_000, f);
+        assert_eq!(c.sys, 3 * f);
+        assert_eq!(c.sys_freq, f);
+        assert_eq!(convert(5_000_000_000, &c), 3 * f);
+        assert_eq!(convert(6_000_000_000, &c), 4 * f);
+        assert_eq!(convert(5_000_000_001, &c) - convert(5_000_000_000, &c), 1);
+        assert_eq!(convert(5_000_000_040, &c) - convert(5_000_000_000, &c), 73);
+        let k = constants(&c, 3);
+        assert_eq!((k[4], k[6], k[8]), (73, 40, 3));
+        let s = counter_calibration(0, 1_000_000_000, 0, 10_000_000, 1_563_000_000);
+        assert_eq!(convert(2_000_000_000, &s), 3_126_000_000);
+        let mut last = 0;
+        for t in (5_000_000_000u64..5_000_100_000).step_by(997) {
+            let v = convert(t, &c);
+            assert!(v >= last);
+            assert_eq!(shader_math(t, &k), Some(v));
+            last = v;
+        }
+    }
+
+    #[test]
+    fn shader_math_does_not_overflow_for_real_host_timestamp_rates() {
+        let f = 1_825_000_000u64;
+        for gf in [10_000_000u64, 24_000_000, 25_000_000, 99_750_000, 100_000_000, 1_000_000_000, 1_000_000_007, 2_400_000_000] {
+            let c = counter_calibration(1 << 40, gf, 1 << 33, 10_000_000, f);
+            let k = constants(&c, 0);
+            for t in [1u64 << 40, (1 << 40) + gf - 1, (1 << 40) + 3600 * gf, (1 << 40) + 30 * 86_400 * gf] {
+                let want = c.sys as i128 + ((t as i128 - c.gpu as i128) * f as i128).div_euclid(gf as i128);
+                let got = shader_math(t, &k).unwrap_or_else(|| panic!("overflow gf={gf} t={t}"));
+                assert!((got as i128 - want).abs() <= 1, "gf={gf} t={t} got={got} want={want}");
+            }
+        }
+    }
+
+    #[test]
+    fn system_counter_frequency_follows_the_emulated_console() {
+        let per_type: Vec<u64> = (2..=8).map(xgs_kmd_emu::gpu_frequency_hz).collect();
+        assert_eq!(per_type, vec![853_333_333, 914_285_714, 1_172_000_000, 1_172_000_000, 1_563_000_000, 1_825_000_000, 1_825_000_000]);
+        assert_eq!(system_counter_hz(), xgs_kmd_emu::gpu_frequency_hz(xgs_kmd_emu::device_type()));
+        assert_eq!(system_counter_hz(), crate::console_slots_dev2::kmd_info(xgs_kmd_emu::device_type()).word0);
     }
 
     #[test]

@@ -78,6 +78,12 @@ fn connect_validation() {
     c1[0] = 1;
     c1[4] = 0;
     assert_eq!(XApuConnect(c1.as_ptr(), region.as_mut_ptr(), &mut h), E_NOTIMPL);
+    let mut c3 = good;
+    c3[0] = 3;
+    assert_eq!(XApuConnect(c3.as_ptr(), region.as_mut_ptr(), &mut h), E_NOTIMPL);
+    assert_eq!(h, 0);
+    let row = include_str!("../exports.txt").lines().find(|l| l.split_whitespace().nth(1) == Some("XApuConnect")).unwrap();
+    assert_eq!(row.split_whitespace().nth(2), Some("stub"), "XApuConnect must stay labelled stub while processTypes 1 and 3 are blocked");
     assert_eq!(XApuConnect(good.as_ptr(), region.as_mut_ptr(), &mut h), S_OK);
     assert_ne!(u64::from_le_bytes(region[0..8].try_into().unwrap()), 0);
     assert_eq!(u64::from_le_bytes(region[8..16].try_into().unwrap()), 0);

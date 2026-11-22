@@ -1,0 +1,38 @@
+{
+ "ConnectedStorageService.ProxyStub.dll": {
+  "built_dll": "target/release/connectedstorageservice_proxystub.dll",
+  "not_in_built_dll": []
+ },
+ "d3d12_xs.dll": {
+  "built_dll": "target/release/d3d12_xs.dll",
+  "not_in_built_dll": []
+ },
+ "xmem.dll": {
+  "built_dll": "target/release/xmem.dll",
+  "not_in_built_dll": []
+ },
+ "acphal.dll": {
+  "built_dll": "target/release/acphal.dll",
+  "not_in_built_dll": []
+ },
+ "xcrdapi.dll": {
+  "built_dll": "target/release/xcrdapi.dll",
+  "not_in_built_dll": []
+ },
+ "dxcompiler_xs.dll": {
+  "built_dll": "target/release/dxcompiler_xs.dll",
+  "not_in_built_dll": []
+ },
+ "AudioHALWrapper.dll": {
+  "built_dll": "target/release/AudioHALWrapper.dll",
+  "not_in_built_dll": []
+ },
+ "xg_xs.dll": {
+  "built_dll": "target/release/xg_xs.dll",
+  "not_in_built_dll": []
+ },
+ "mfplat.dll": {
+  "built_dll": "target/release/mfplat.dll",
+  "not_in_built_dll": []
+ }
+}

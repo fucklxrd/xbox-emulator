@@ -16,9 +16,6 @@ pub const IOCTL_MEMORY_PROFILING: u32 = 0x7900_c1cc;
 pub const LEGACY_BUILD: u32 = 22000;
 
 extern "system" {
-    fn CreateFileW(name: *const u16, access: u32, share: u32, sa: *mut c_void, disp: u32, flags: u32, tmpl: isize) -> isize;
-    fn DeviceIoControl(h: isize, code: u32, inb: *const c_void, inl: u32, outb: *mut c_void, outl: u32, ret: *mut u32, ov: *mut c_void) -> i32;
-    fn CloseHandle(h: isize) -> i32;
     fn GetLastError() -> u32;
     fn GetModuleHandleW(n: *const u16) -> *mut c_void;
     fn GetProcAddress(h: *mut c_void, n: *const u8) -> *mut c_void;
@@ -97,7 +94,15 @@ pub fn direct_enabled() -> bool {
 }
 
 unsafe fn ioctl(h: isize, code: u32, inb: *const c_void, inl: u32, outb: *mut c_void, outl: u32, ret: &mut u32) -> bool {
-    DeviceIoControl(h, code, inb, inl, outb, outl, ret, null_mut()) != 0
+    xgs_kmd_emu::device_io_control(h, code, inb, inl, outb, outl, ret)
+}
+
+fn create_kmd() -> isize {
+    xgs_kmd_emu::open()
+}
+
+fn close_kmd(h: isize) -> bool {
+    xgs_kmd_emu::close(h)
 }
 
 pub unsafe fn open(out: *mut isize, handshake: bool) -> i32 {
@@ -117,7 +122,7 @@ pub unsafe fn open(out: *mut isize, handshake: bool) -> i32 {
     } else {
         let probe = if legacy() { 0 } else { IOCTL_PROBE };
         DIRECT.store(direct(probe, null(), 0, null_mut(), null_mut()) == Some(0), Ordering::Release);
-        let f = CreateFileW(wide(KMD10_PATH).as_ptr(), 0xc000_0000, 0, null_mut(), 2, 0x80, 0);
+        let f = create_kmd();
         if f == INVALID {
             hr = last_error_hr();
         } else {
@@ -132,7 +137,7 @@ pub unsafe fn open(out: *mut isize, handshake: bool) -> i32 {
                     0
                 };
                 if st < 0 {
-                    CloseHandle(f);
+                    close_kmd(f);
                     hr = st;
                     keep = false;
                 }
@@ -210,7 +215,7 @@ unsafe fn transient(code: u32, inb: *const c_void, inl: u32, has_direct: bool) -
     }
     let st = device_status(code, inb, inl, null_mut(), 0);
     if was_closed && !legacy() {
-        CloseHandle(HANDLE.load(Ordering::Acquire));
+        close_kmd(HANDLE.load(Ordering::Acquire));
         HANDLE.store(INVALID, Ordering::Release);
     }
     st
@@ -230,7 +235,7 @@ unsafe extern "system" fn release_device(h: isize) -> i32 {
                 GetLastError();
             }
         }
-        CloseHandle(h);
+        close_kmd(h);
     }
     unlock();
     0
@@ -373,13 +378,13 @@ unsafe extern "system" fn query_fresh(zero: usize, a: u32, o1: *mut u64, o2: *mu
     if o1.is_null() || zero != 0 {
         return E_INVALIDARG;
     }
-    let f = CreateFileW(wide(KMD10_PATH).as_ptr(), 0xc000_0000, 0, null_mut(), 2, 0x80, 0);
+    let f = create_kmd();
     if f == INVALID {
         return last_error_hr();
     }
     let mut o = [0u64; 2];
     let r = query(f, 0x7900_c1b0, (&a as *const u32).cast(), 4, o.as_mut_ptr().cast(), 0x10);
-    CloseHandle(f);
+    close_kmd(f);
     match r {
         Ok(()) => {
             *o1 = o[0];
@@ -643,7 +648,7 @@ pub unsafe extern "system" fn D3D12XboxEnableMemoryProfiling(a: u64, b: u64, c: 
 mod tests {
     use super::*;
 
-    const NOT_FOUND: i32 = 0x8007_0002u32 as i32;
+    const NOT_SUPPORTED: i32 = 0x8007_0032u32 as i32;
 
     #[link(name = "kernel32")]
     extern "system" {
@@ -696,18 +701,20 @@ mod tests {
         unsafe { RemoveVectoredExceptionHandler(v) };
     }
 
+    static SERIAL: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+    fn serial() -> std::sync::MutexGuard<'static, ()> {
+        SERIAL.lock().unwrap_or_else(|e| e.into_inner())
+    }
+
     #[test]
-    fn pixie_entries_fail_like_console_without_xgskmd10() {
+    fn pixie_entries_validate_like_console() {
+        let _g = serial();
+        let (mut a, mut b, mut c, mut d) = (0u64, 0u64, 0u32, 0u32);
         let t = table();
         let open: unsafe extern "system" fn(*mut isize) -> i32 = unsafe { core::mem::transmute(t[1] as usize) };
-        let mut h = 0isize;
-        assert_eq!(unsafe { open(&mut h) }, NOT_FOUND);
         assert_eq!(unsafe { open(null_mut()) }, E_INVALIDARG);
-        assert_eq!(cached(), INVALID);
         assert!(!direct_enabled());
-        let buf = [0u8; 0x4028];
-        let mut out = [0u8; 0x90];
-        let (mut a, mut b, mut c, mut d) = (0u64, 0u64, 0u32, 0u32);
         unsafe {
             assert_eq!(set_pair(INVALID, 1, 2), E_INVALIDARG);
             assert_eq!(set_counters(INVALID, 0x21, null(), null(), null()), E_INVALIDARG);
@@ -719,8 +726,55 @@ mod tests {
             assert_eq!(allocate(INVALID, 0, 0, 0x2000_0004, 0, &mut a, &mut b, null_mut()), E_INVALIDARG);
             assert_eq!(allocate(INVALID, 0, 0, 0, 0, &mut a, &mut b, null_mut()), E_INVALIDARG);
             assert_eq!(query_fresh(1, 0, &mut a, null_mut()), E_INVALIDARG);
-            assert_eq!(query_fresh(0, 0, &mut a, null_mut()), NOT_FOUND);
-            for f in [c20b as usize, c20f as usize, c1cb as usize, c1a7 as usize, c237 as usize, c233 as usize, c273 as usize, c21b as usize, c283 as usize, c287 as usize, c28f as usize] {
+        }
+        assert_eq!(c217_size(), if legacy() { 0x48 } else { 0x50 });
+    }
+
+    #[test]
+    fn read_triple_returns_emulated_kmd_gpu_configuration() {
+        let _g = serial();
+        let t = table();
+        let open: unsafe extern "system" fn(*mut isize) -> i32 = unsafe { core::mem::transmute(t[0x08 / 8] as usize) };
+        let release: unsafe extern "system" fn(isize) -> i32 = unsafe { core::mem::transmute(t[0x10 / 8] as usize) };
+        let triple: unsafe extern "system" fn(isize, *mut u64, *mut u32, *mut u32) -> i32 = unsafe { core::mem::transmute(t[0x28 / 8] as usize) };
+        let mut h = INVALID;
+        assert_eq!(unsafe { open(&mut h) }, 0);
+        assert_ne!(h, INVALID);
+        assert_eq!(cached(), h);
+        let (mut f, mut m, mut cu) = (0u64, 0u32, 0u32);
+        assert_eq!(unsafe { triple(h, &mut f, &mut m, &mut cu) }, 0);
+        let dt = xgs_kmd_emu::device_type();
+        let r = crate::console_slots_dev2::kmd_reply(dt);
+        assert_eq!(f.to_le_bytes(), r[0..8]);
+        assert_eq!(m.to_le_bytes(), r[8..12]);
+        assert_eq!(cu.to_le_bytes(), r[12..16]);
+        assert_eq!(f, xgs_kmd_emu::gpu_frequency_hz(dt));
+        let info = crate::console_slots_dev2::console_info(crate::console_slots_dev2::family(dt), dt);
+        assert_eq!(&info[0..8], &r[0..8]);
+        assert_eq!(unsafe { release(h) }, 0);
+        assert_eq!(cached(), INVALID);
+        assert!(!xgs_kmd_emu::is_device(h));
+        assert_eq!(unsafe { triple(h, &mut f, &mut m, &mut cu) }, 0x8007_0006u32 as i32);
+    }
+
+    #[test]
+    fn unmodeled_ioctls_fail_on_the_emulated_device() {
+        let _g = serial();
+        let t = table();
+        let open: unsafe extern "system" fn(*mut isize) -> i32 = unsafe { core::mem::transmute(t[1] as usize) };
+        let mut h = INVALID;
+        assert_eq!(unsafe { open(&mut h) }, 0);
+        let buf = [0u8; 0x4028];
+        let mut out = [0u8; 0x90];
+        let (mut a, mut b, mut c) = (0u64, 0u64, 0u32);
+        unsafe {
+            assert_eq!(read_u32(h, &mut c), NOT_SUPPORTED);
+            assert_eq!(read_pair(h, &mut a, &mut b), NOT_SUPPORTED);
+            assert_eq!(set_pair(h, 1, 2), 0);
+            assert_eq!(xgs_kmd_emu::ported::process_options().host_posts.get(&1), Some(&2));
+            assert_eq!(allocate(h, 0, 0, 0, 0, &mut a, &mut b, null_mut()), NOT_SUPPORTED);
+            assert_eq!(query_fresh(0, 0, &mut a, null_mut()), NOT_SUPPORTED);
+            for f in [c20b as usize, c20f as usize, c1cb as usize, c1a7 as usize, c237 as usize, c233 as usize, c273 as usize] {
                 let f: unsafe extern "system" fn(*const c_void) -> i32 = core::mem::transmute(f);
                 assert_eq!(f(buf.as_ptr().cast()), STATUS_UNSUCCESSFUL);
             }
@@ -734,11 +788,16 @@ mod tests {
             assert_eq!(c1af(1, 2, 3, 4), STATUS_UNSUCCESSFUL);
             assert_eq!(c24b(1, 2), STATUS_UNSUCCESSFUL);
             assert_eq!(c23b(1, 2, 3), STATUS_UNSUCCESSFUL);
-            assert_eq!(c24f(0, buf.as_ptr().cast()), NOT_FOUND);
-            assert_eq!(release_device(INVALID), 0);
+            assert_eq!(c24f(0, buf.as_ptr().cast()), NOT_SUPPORTED);
+            assert_eq!(D3D12XboxEnableMemoryProfiling(1, 2, 3), 0);
+            assert_eq!(xgs_kmd_emu::ported::memory_profiling(), Some([1, 2, 3]));
+            let code = [0u32; 16];
+            let p = code.as_ptr() as usize;
+            assert_eq!(D3D12UploadCustomMicrocodeX(1, p, 64, p, 1, 1, p), E_FAIL);
+            assert_eq!(release_device(h), 0);
         }
         assert_eq!(cached(), INVALID);
-        assert_eq!(c217_size(), if legacy() { 0x48 } else { 0x50 });
+        assert!(!xgs_kmd_emu::is_device(h));
     }
 
     #[test]
@@ -753,15 +812,5 @@ mod tests {
             a[i] = 0;
             assert_eq!(unsafe { D3D12UploadCustomMicrocodeX(a[0] as u32, a[1], a[2], a[3], a[4], a[5], a[6]) }, E_INVALIDARG);
         }
-        let code = [0u32; 16];
-        let p = code.as_ptr() as usize;
-        assert_eq!(unsafe { D3D12UploadCustomMicrocodeX(1, p, 64, p, 1, 1, p) }, E_FAIL);
-        assert_eq!(cached(), INVALID);
-    }
-
-    #[test]
-    fn memory_profiling_matches_console() {
-        assert_eq!(unsafe { D3D12XboxEnableMemoryProfiling(1, 2, 3) }, NOT_FOUND);
-        assert_eq!(cached(), INVALID);
     }
 }

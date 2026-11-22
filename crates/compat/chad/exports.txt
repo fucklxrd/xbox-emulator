@@ -1,4 +1,4 @@
-1 XDspActivate implemented | type 1 convolution (XDefiant) on host; types 2 and 3 return E_NOTIMPL, no title uses them
+1 XDspActivate stub | type 1 convolution (XDefiant) runs on the host with the console validation; types 2 (FFT) and 3 (IFFT) pass the console descriptor checks and then return E_NOTIMPL: their DSP microcode and buffer layout are not in any dump (see docs/BLOCKERS.md, chad FFT/IFFT streams)
 2 XDspConnect implemented
 3 XDspConnectWithMaximumStreamLimit implemented | console 0x2bc0: E_INVALIDARG for mem/size/activations, streams > 0x100 or priority > 2, then E_POINTER for a null out; XDspConnect is this call with 0x100 streams, priority 2 (console 0x2b90); limits kept per client, the CPU convolution has no hardware stream queue to apply them to
 4 XDspDeactivate implemented

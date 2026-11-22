@@ -12,3 +12,6 @@ path = "src/main.rs"
 [dependencies]
 serde_json = "1.0.154"
 tombox-pe = { path = "../../tombox-pe" }
+
+[dev-dependencies]
+dab = { path = "../../compat/dab" }

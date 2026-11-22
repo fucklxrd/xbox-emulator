@@ -134,6 +134,24 @@ fn vopc_gfx10_compare_table() {
         (0xef, "v_cmp_tru_f16", false),
         (0xf8, "v_cmpx_u_f16", true),
         (0xff, "v_cmpx_tru_f16", true),
+        (0x89, "v_cmp_lt_i16", false),
+        (0x8e, "v_cmp_ge_i16", false),
+        (0x8f, "v_cmp_class_f16", false),
+        (0x99, "v_cmpx_lt_i16", true),
+        (0x9e, "v_cmpx_ge_i16", true),
+        (0x9f, "v_cmpx_class_f16", true),
+        (0xa0, "v_cmp_f_i64", false),
+        (0xa7, "v_cmp_t_i64", false),
+        (0xa9, "v_cmp_lt_u16", false),
+        (0xae, "v_cmp_ge_u16", false),
+        (0xb0, "v_cmpx_f_i64", true),
+        (0xb7, "v_cmpx_t_i64", true),
+        (0xb9, "v_cmpx_lt_u16", true),
+        (0xbe, "v_cmpx_ge_u16", true),
+        (0xe0, "v_cmp_f_u64", false),
+        (0xe5, "v_cmp_ne_u64", false),
+        (0xf0, "v_cmpx_f_u64", true),
+        (0xf7, "v_cmpx_t_u64", true),
     ];
     for &(op, name, x) in cases {
         let (m, d) = mnemonic(&[vopc(op, v(1), 2)]);
@@ -163,6 +181,11 @@ fn cmpx_writes_exec_only() {
         ("v_cmpx_gt_f16", vec![vopc(0xdc, v(1), 2)], vec!["(f16tof32((v1) & 0xffffu) > f16tof32((v2) & 0xffffu))"]),
         ("v_cmpx_nlt_f16", vec![vopc(0xfe, v(1), 2)], vec!["(!(f16tof32((v1) & 0xffffu) < f16tof32((v2) & 0xffffu)))"]),
         ("v_cmpx_gt_f32 vop3 abs/neg", vop3(0x14, 0, [v(1), v(2), 0], 1, 2).to_vec(), vec!["(abs(asfloat(v1)) > (-asfloat(v2)))"]),
+        ("v_cmpx_lt_i16", vec![vopc(0x99, v(1), 2)], vec!["((asint(((v1) & 0xffffu) << 16) >> 16) < (asint(((v2) & 0xffffu) << 16) >> 16))"]),
+        ("v_cmpx_ge_u16", vec![vopc(0xbe, v(1), 2)], vec!["(((v1) & 0xffffu) >= ((v2) & 0xffffu))"]),
+        ("v_cmpx_lt_i64", vec![vopc(0xb1, v(1), 4)], vec!["((asint(v2) < asint(v5)) || ((v2 == v5) && (v1 < v4)))"]),
+        ("v_cmpx_ne_u64", vec![vopc(0xf5, v(1), 4)], vec!["((v2 != v5) || (v1 != v4))"]),
+        ("v_cmpx_class_f16", vec![vopc(0x9f, v(1), 2)], vec!["tb_cmp_class16(((v1) & 0xffffu), v2)"]),
     ];
     for (label, body, expect) in cases {
         let mut b = body.clone();
@@ -181,6 +204,9 @@ fn vop3_compare_applies_source_modifiers() {
     check("v_cmp_lg_f32", &program(&b), None, &["((asfloat(v1) < asfloat(v2)) || (asfloat(v1) > asfloat(v2)))"]);
     let b = [vopc(0x85, v(1), 2), vop1(1, 0, v(3))];
     check("v_cmp_ne_i32", &program(&b), None, &["(asint(v1) != asint(v2))"]);
+    let b = vop3(0xa1, 106, [v(1), v(4), 0], 1, 0);
+    let err = translate(&shader(&program(&[b[0], b[1], vop1(1, 0, v(3))]), None)).err().unwrap_or_default();
+    assert!(err.contains("abs/neg on an integer compare"), "v_cmp_lt_i64 abs must be refused: {err}");
 }
 
 #[test]
@@ -198,7 +224,7 @@ fn new_vector_ops() {
         ("v_cvt_off_f32_i4", vec![vop1(0x0e, 0, v(3))], vec!["((float)(asint(v3 << 28) >> 28) * 0.0625)"]),
         ("v_lerp_u8", lerp.to_vec(), vec!["((((v1 >> 24u) & 0xffu) + ((v2 >> 24u) & 0xffu) + ((v3 >> 24u) & 1u)) >> 1) << 24u)"]),
         ("v_alignbyte_b32", align.to_vec(), vec!["(((v3) & 3u) == 0u ? v2 : ((v2 >> (((v3) & 3u) * 8u)) | (v1 << (32u - ((v3) & 3u) * 8u))))"]),
-        ("v_ldexp_f32", ldexp.to_vec(), vec!["ldexp(ldexp(asfloat(v1), (float)(clamp(asint(v3), -252, 252) >> 1))"]),
+        ("v_ldexp_f32", ldexp.to_vec(), vec!["tb_ldexp32(asfloat(v1), asint(v3))"]),
     ];
     for (label, body, expect) in cases {
         check(label, &program(&body), None, &expect);
@@ -269,8 +295,8 @@ fn second_batch_vector_ops() {
         ("v_sin_f16", vec![vop1(0x60, 0, v(1))], vec!["sin(f16tof32((v1) & 0xffffu) * 6.28318530718)"]),
         ("v_cos_f16", vec![vop1(0x61, 0, v(1))], vec!["cos("]),
         ("v_sat_pk_u8_i16", vec![vop1(0x62, 0, v(3))], vec!["clamp(asint(v3) >> 16, 0, 255) << 8"]),
-        ("v_cvt_norm_i16_f16", vec![vop1(0x63, 0, v(1))], vec!["* 32767.0"]),
-        ("v_cvt_norm_u16_f16", vec![vop1(0x64, 0, v(1))], vec!["* 65535.0"]),
+        ("v_cvt_norm_i16_f16", vec![vop1(0x63, 0, v(1))], vec!["32767u)"]),
+        ("v_cvt_norm_u16_f16", vec![vop1(0x64, 0, v(1))], vec!["65535u)"]),
         ("v_pipeflush", vec![vop1(0x1b, 0, 0), vop1(1, 0, v(3))], vec![]),
         ("v_ldexp_f16", vec![vop2(0x3b, 0, v(1), 3)], vec!["ldexp(f16tof32((v1) & 0xffffu), (float)clamp(asint((v3) << 16) >> 16, -64, 64))"]),
         ("v_pk_fmac_f16", vec![vop2(0x3c, 0, v(1), 2)], vec!["f16tof32((v1) >> 16) * f16tof32((v2) >> 16) + f16tof32((v0) >> 16)"]),
@@ -279,7 +305,7 @@ fn second_batch_vector_ops() {
         ("v_sad_u16", o(0x15c, [v(1), v(2), v(3)]), vec!["((v1 >> 16u) & 0xffffu)"]),
         ("v_sad_u32", o(0x15d, [v(1), v(2), v(3)]), vec!["(((max(v1, v2) - min(v1, v2))) + v3)"]),
         ("v_cvt_pk_u8_f32", o(0x15e, [v(1), 0x81, v(3)]), vec!["(uint)clamp(tb_rne(t"]),
-        ("v_cvt_pknorm_i16_f32", o(0x368, [v(1), v(2), 0]), vec!["clamp(t", "* 32767.0"]),
+        ("v_cvt_pknorm_i16_f32", o(0x368, [v(1), v(2), 0]), vec!["clamp(t", "32767u)"]),
         ("v_cvt_pknorm_u16_f32", o(0x369, [v(1), v(2), 0]), vec!["saturate(t"]),
         ("v_cvt_pk_u16_u32", o(0x36a, [v(1), v(3), 0]), vec!["(min(v1, 0xffffu) | (min(v3, 0xffffu) << 16))"]),
         ("v_cvt_pk_i16_i32", o(0x36b, [v(1), v(3), 0]), vec!["clamp(asint(v3), -32768, 32767)) << 16"]),
@@ -308,8 +334,8 @@ fn second_batch_vector_ops() {
         ("v_med3_i16", o(0x358, [v(1), v(2), v(3)]), vec!["asuint(max(min("]),
         ("v_med3_u16", o(0x359, [v(1), v(2), v(3)]), vec!["max(min("]),
         ("v_pack_b32_f16", vop3(0x311, 0, [v(1), v(2), 0], 0, 2).to_vec(), vec!["(((v1) & 0xffffu) | ((((v2) & 0xffffu) ^ 0x8000u) << 16))"]),
-        ("v_cvt_pknorm_i16_f16", o(0x312, [v(1), v(2), 0]), vec!["f16tof32(((v1) & 0xffffu))", "* 32767.0"]),
-        ("v_cvt_pknorm_u16_f16", o(0x313, [v(1), v(2), 0]), vec!["* 65535.0"]),
+        ("v_cvt_pknorm_i16_f16", o(0x312, [v(1), v(2), 0]), vec!["f16tof32(((v1) & 0xffffu))", "32767u)"]),
+        ("v_cvt_pknorm_u16_f16", o(0x313, [v(1), v(2), 0]), vec!["65535u)"]),
     ];
     for (label, body, expect) in cases {
         check(label, &program(&body), None, &expect);

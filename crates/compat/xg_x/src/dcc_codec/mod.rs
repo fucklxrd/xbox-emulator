@@ -1,8 +1,15 @@
-mod addr;
-mod bits;
+pub(crate) mod addr;
+pub(crate) mod bits;
+pub(crate) mod dec;
+pub(crate) mod enc;
+pub(crate) mod run;
 mod tables;
 #[cfg(test)]
 mod tests;
+#[cfg(test)]
+mod oracle_dec;
+#[cfg(test)]
+mod oracle_enc;
 
 use tables::FORMATS;
 
@@ -12,7 +19,17 @@ pub(crate) const E_INVALIDARG: i32 = 0x8007_0057u32 as i32;
 pub(crate) struct Dcc {
     pub(crate) o: [u8; 0x420],
     pub(crate) s: [[u8; 256]; 3],
+    pub(crate) sc: [u8; 64],
+    pub(crate) msg: Vec<String>,
 }
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum Stop {
+    Fault(&'static str),
+    Undef(&'static str),
+}
+
+pub(crate) type R<T> = Result<T, Stop>;
 
 impl Dcc {
     pub(crate) fn g(&self, off: usize) -> u32 {
@@ -23,8 +40,28 @@ impl Dcc {
         self.o[off..off + 4].copy_from_slice(&v.to_le_bytes());
     }
 
+    pub(crate) fn bit(&self, off: usize, i: u32) -> bool {
+        let o = off + 4 * (i >> 5) as usize;
+        o + 4 <= self.o.len() && self.g(o) >> (i & 31) & 1 != 0
+    }
+
+    pub(crate) fn put_bit(&mut self, off: usize, i: u32, on: bool) -> R<()> {
+        let o = off + 4 * (i >> 5) as usize;
+        if o + 4 > self.o.len() {
+            return Err(Stop::Undef("bit store outside the codec object"));
+        }
+        let b = 1u32 << (i & 31);
+        let w = self.g(o);
+        self.p(o, if on { w | b } else { w & !b });
+        Ok(())
+    }
+
+    pub(crate) fn mask_bit(&self, k: u32) -> bool {
+        self.bit(0x38, k)
+    }
+
     pub(crate) fn new() -> Dcc {
-        let mut d = Dcc { o: [0; 0x420], s: [[0; 256]; 3] };
+        let mut d = Dcc { o: [0; 0x420], s: [[0; 256]; 3], sc: [0; 64], msg: Vec::new() };
         d.p(0x00, 1);
         d.p(0x04, 4);
         d.p(0x08, 4);

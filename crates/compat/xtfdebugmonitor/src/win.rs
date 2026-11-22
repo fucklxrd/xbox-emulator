@@ -16,6 +16,7 @@ extern "system" {
     pub fn ContinueDebugEvent(pid: u32, tid: u32, status: u32) -> BOOL;
     pub fn OpenProcess(access: u32, inherit: BOOL, pid: u32) -> HANDLE;
     pub fn ReadProcessMemory(h: HANDLE, addr: *const c_void, buf: *mut c_void, n: usize, read: *mut usize) -> BOOL;
+    pub fn Sleep(ms: u32);
 }
 
 pub const DBG_CONTINUE: u32 = 0x0001_0002;

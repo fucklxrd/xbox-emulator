@@ -34,6 +34,7 @@ pub mod os_host;
 pub mod timer;
 pub mod live;
 pub mod title_os;
+pub mod kmd_bridge;
 
 /// Value of `key=` in `tombox.cfg` next to the host executable (user-side configuration that
 /// lives with the game data, not in the repository).

@@ -191,7 +191,6 @@ const XBOX_SLOT_IA_SET_INDEX_BUFFER: usize = 47;
 const PC_SLOT_DRAW_INDEXED: usize = 13;
 const PC_SLOT_DISPATCH: usize = 14;
 const PC_SLOT_IA_SET_INDEX_BUFFER: usize = 43;
-const PC_SLOT_SET_PREDICATION: usize = 55;
 const PC_SLOT_WRITE_BUFFER_IMMEDIATE: usize = 66;
 pub const WBI_MODE_MARKER_IN: u32 = 1;
 pub const WBI_MODE_MARKER_OUT: u32 = 2;
@@ -260,23 +259,25 @@ pub fn draw_indexed_x_view(va: u64, format: u32, count: u32) -> Option<IbView> {
 
 static DRAWX_LOG: AtomicUsize = AtomicUsize::new(0);
 
-unsafe extern "system" fn cl_draw_indexed_x(this: *mut c_void, va: u64, format: u32, count: u32, arg5: u32) {
+pub fn draw_indexed_x_call(count: u32, instance_count: u32) -> (u32, u32, u32, i32, u32) {
+    (count, instance_count, 0, 0, 0)
+}
+
+unsafe extern "system" fn cl_draw_indexed_x(this: *mut c_void, va: u64, format: u32, count: u32, instance_count: u32) {
     let Some(view) = draw_indexed_x_view(va, format, count) else {
         if once(&DRAWX_LOG, 8) {
             record("d3d12_xs", "console_slots", &format!("DrawIndexedX va={va:#x} format={format} count={count}: fails console validation (R16/R32 index, non-zero count, aligned address); not drawn"));
         }
         return;
     };
-    if arg5 != 0 && once(&DRAWX_LOG, 8) {
-        record("d3d12_xs", "console_slots", &format!("DrawIndexedX: fifth argument {arg5:#x} goes into the firmware draw packet unvalidated; drawn as one instance"));
-    }
     let real = REAL_SET_IB.load(Ordering::Relaxed);
     let set_ib: unsafe extern "system" fn(*mut c_void, *const IbView) = unsafe { core::mem::transmute(if real != 0 { real } else { pc_fn(this, PC_SLOT_IA_SET_INDEX_BUFFER) }) };
     let draw: unsafe extern "system" fn(*mut c_void, u32, u32, u32, i32, u32) = unsafe { core::mem::transmute(pc_fn(this, PC_SLOT_DRAW_INDEXED)) };
     let prev = bound_ib(this as usize);
     unsafe {
         set_ib(this, &view);
-        draw(this, count, 1, 0, 0, 0);
+        let (a, b, c, d, e) = draw_indexed_x_call(count, instance_count);
+        draw(this, a, b, c, d, e);
         match prev {
             Some(p) => set_ib(this, &p),
             None => set_ib(this, core::ptr::null()),
@@ -284,35 +285,8 @@ unsafe extern "system" fn cl_draw_indexed_x(this: *mut c_void, va: u64, format: 
     }
 }
 
-#[repr(C)]
-pub struct PredicationBuffer {
-    pub va: u64,
-    pub op: u32,
-}
-
-static PRED_LOG: AtomicUsize = AtomicUsize::new(0);
-
-unsafe extern "system" fn cl_set_predication_buffer(this: *mut c_void, desc: *const PredicationBuffer) {
-    let f: unsafe extern "system" fn(*mut c_void, *mut c_void, u64, u32) = unsafe { core::mem::transmute(pc_fn(this, PC_SLOT_SET_PREDICATION)) };
-    if desc.is_null() {
-        unsafe { f(this, core::ptr::null_mut(), 0, 0) };
-        return;
-    }
-    let (va, op) = unsafe { ((*desc).va, (*desc).op) };
-    if va == 0 || va % 8 != 0 {
-        if once(&PRED_LOG, 8) {
-            record("d3d12_xs", "console_slots", &format!("SetPredicationBufferX: BufferLocation {va:#x} must be a non-null multiple of 8 (console validation)"));
-        }
-        return;
-    }
-    match crate::gpu_va::lookup(va) {
-        Some((e, off)) if e.buffer && off + 8 <= e.len => unsafe { f(this, e.res as *mut c_void, off, op) },
-        _ => {
-            if once(&PRED_LOG, 8) {
-                record("d3d12_xs", "console_slots", &format!("SetPredicationBufferX: {va:#x} is not inside a tracked buffer; predication not set"));
-            }
-        }
-    }
+unsafe extern "system" fn cl_set_predication_buffer(this: *mut c_void, desc: *const crate::cl_fw::PredicationBufferDesc) {
+    unsafe { crate::cl_fw::set_predication_buffer(this, desc) }
 }
 
 #[repr(C)]
@@ -435,6 +409,7 @@ fn device_plan() -> Vec<(usize, usize)> {
     for s in DEV_ALL_ONES { p.push((s, dev_all_ones as usize)); }
     for s in DEV_NOTIMPL { p.push((s, dev_notimpl as usize)); }
     p.push((DEV_STORE3, dev_store3 as usize));
+    p.extend(crate::device_console_fix::plan());
     p
 }
 
@@ -503,6 +478,8 @@ mod tests {
         assert_eq!(draw_indexed_x_view(0, DXGI_FORMAT_R16_UINT, 3), None);
         assert_eq!(draw_indexed_x_view(0x1000, 28, 3), None);
         assert_eq!(core::mem::size_of::<IbView>(), 16);
+        assert_eq!(draw_indexed_x_call(36, 4), (36, 4, 0, 0, 0));
+        assert_eq!(draw_indexed_x_call(6, 0), (6, 0, 0, 0, 0));
     }
 
     #[test]

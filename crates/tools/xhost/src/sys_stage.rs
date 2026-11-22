@@ -47,8 +47,11 @@ mod tests {
 
     #[test]
     fn stage_copies_every_forwarded_sys_dll_once() {
-        let built = std::env::current_exe().unwrap().ancestors().skip(1).map(|a| a.join("dab.dll")).find(|p| p.is_file());
-        let Some(built) = built else { panic!("dab.dll not built; cargo build -p dab first") };
+        let in_build_dir = |build: &Path| {
+            std::fs::read_dir(build.join("dab")).ok()?.flatten().map(|e| e.path().join("out").join("dab.dll")).filter(|p| p.is_file()).max_by_key(|p| std::fs::metadata(p).and_then(|m| m.modified()).ok())
+        };
+        let built = std::env::current_exe().unwrap().ancestors().skip(1).find_map(|a| [a.join("dab.dll"), a.join("deps").join("dab.dll")].into_iter().find(|p| p.is_file()).or_else(|| in_build_dir(&a.join("build"))));
+        let Some(built) = built else { panic!("dab.dll (an xhost dev-dependency) is not in the target dir above the test executable") };
         let data = std::fs::read(&built).unwrap();
         assert_eq!(sys_targets(&data), vec!["dab_sys".to_string()]);
         let st = std::env::temp_dir().join(format!("xhost_sys_stage_{}", std::process::id()));
